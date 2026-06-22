@@ -199,10 +199,9 @@
         <div class="settings-group-title">🔐 Lock</div>
         <div class="settings-fields">
           <div class="field">
-            <label for="lock_entity_id">Lock Entity</label>
-            <select id="lock_entity_id">
-              <option value="">Loading entities…</option>
-            </select>
+            <label>Lock Entity / Entities</label>
+            <div id="lock_entities"></div>
+            <button type="button" class="add-auto" onclick="addLock()">+ Add lock</button>
           </div>
           <div class="field-row">
             <div class="field">
@@ -222,29 +221,6 @@
         </div>
       </div>
 
-      <!-- Thermostat -->
-      <div class="settings-group">
-        <div class="settings-group-title">🌡️ Thermostat</div>
-        <div class="settings-fields">
-          <div class="field">
-            <label for="thermostat_entity_id">Thermostat Entity (optional)</label>
-            <select id="thermostat_entity_id">
-              <option value="">None (disabled)</option>
-            </select>
-          </div>
-          <div class="field-row">
-            <div class="field">
-              <label for="guest_temp">Guest Temp (°F)</label>
-              <input type="number" id="guest_temp" min="60" max="85" />
-            </div>
-            <div class="field">
-              <label for="away_temp">Away Temp (°F)</label>
-              <input type="number" id="away_temp" min="55" max="80" />
-            </div>
-          </div>
-        </div>
-      </div>
-
       <!-- Notifications & Automations -->
       <div class="settings-group">
         <div class="settings-group-title">🔔 Notifications & Automations</div>
@@ -254,20 +230,23 @@
             <select id="notify_service">
               <option value="">Loading…</option>
             </select>
+            <div class="field-hint">The HA service used to send push notifications to your phone. Requires the HA Companion App.</div>
           </div>
           <div class="field">
             <label>Check-in Automations</label>
             <div id="checkin_automations"></div>
-            <button type="button" class="add-auto" onclick="addAutomation('checkin')">
-              + Add automation
-            </button>
+            <button type="button" class="add-auto" onclick="addAutomation('checkin')">+ Add automation</button>
           </div>
           <div class="field">
             <label>Check-out Automations</label>
             <div id="checkout_automations"></div>
-            <button type="button" class="add-auto" onclick="addAutomation('checkout')">
-              + Add automation
-            </button>
+            <button type="button" class="add-auto" onclick="addAutomation('checkout')">+ Add automation</button>
+          </div>
+          <div class="field">
+            <label>Pre-Check-in Automations</label>
+            <div id="precheckin_automations"></div>
+            <button type="button" class="add-auto" onclick="addAutomation('precheckin')">+ Add automation</button>
+            <div class="field-hint">Triggered automatically when the cleaner locks the door and leaves.</div>
           </div>
         </div>
       </div>

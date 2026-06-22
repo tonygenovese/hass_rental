@@ -150,7 +150,10 @@ async function loadReservations() {
       <div class="res-top">
         <div>
           <div class="res-name">${esc(r.guest_name)}</div>
-          <div class="res-nights">${r.duration_nights} night${r.duration_nights !== 1 ? "s" : ""}</div>
+          <div class="res-meta">
+            ${r.duration_nights} night${r.duration_nights !== 1 ? "s" : ""}
+            ${r.phone_last4 ? `<span class="res-phone">· ···-${esc(r.phone_last4)}</span>` : ""}
+          </div>
         </div>
         ${r.is_active ? '<span class="badge-active">Active</span>' : ""}
       </div>
@@ -259,19 +262,18 @@ function actionTypeLabel(type) {
 
 // ── Settings ───────────────────────────────────────────────────────────────
 async function loadSettings() {
-  const [cfg, lockEntities, climateEntities, automationEntities, notifyServices] = await Promise.all([
+  const [cfg, lockEntities, automationEntities, notifyServices] = await Promise.all([
     fetch("api/settings").then(r => r.json()),
     fetch("api/ha/entities?domain=lock").then(r => r.json()),
-    fetch("api/ha/entities?domain=climate").then(r => r.json()),
     fetch("api/ha/entities?domain=automation").then(r => r.json()),
     fetch("api/ha/notify-services").then(r => r.json()),
   ]);
 
   allAutomations = automationEntities;
+  window._lockEntities = lockEntities;
 
   const fields = ["ical_url", "poll_interval_minutes", "default_checkin_time",
-    "default_checkout_time", "guest_code_slot", "cleaner_code_slot",
-    "cleaner_code", "guest_temp", "away_temp"];
+    "default_checkout_time", "guest_code_slot", "cleaner_code_slot", "cleaner_code"];
   fields.forEach(f => { const el = document.getElementById(f); if (el) el.value = cfg[f] ?? ""; });
 
   if (cfg.cleaner_code === "••••") {
@@ -279,21 +281,45 @@ async function loadSettings() {
     document.getElementById("cleaner_code").value = "";
   }
 
-  const lockValue = cfg.lock_entity_id || (lockEntities.length === 1 ? lockEntities[0].entity_id : "");
-  populateSelect("lock_entity_id", lockEntities, lockValue, "Select lock entity…");
-  maybeShowAutoHint("lock_entity_id", lockEntities, lockValue, cfg.lock_entity_id);
-
-  const climateValue = cfg.thermostat_entity_id || (climateEntities.length === 1 ? climateEntities[0].entity_id : "");
-  populateSelect("thermostat_entity_id", climateEntities, climateValue, "None (disabled)");
-  maybeShowAutoHint("thermostat_entity_id", climateEntities, climateValue, cfg.thermostat_entity_id);
+  // Multi-lock: migrate single lock_entity_id → lock_entity_ids
+  const lockIds = cfg.lock_entity_ids?.length ? cfg.lock_entity_ids
+    : (cfg.lock_entity_id ? [cfg.lock_entity_id] : []);
+  renderLockList(lockIds, lockEntities);
 
   const notifyOptions = notifyServices.map(s => ({ entity_id: s.service, name: s.label }));
   const notifyValue = cfg.notify_service || (notifyOptions.length === 1 ? notifyOptions[0].entity_id : "");
   populateSelect("notify_service", notifyOptions, notifyValue, "Select notify service…");
   maybeShowAutoHint("notify_service", notifyOptions, notifyValue, cfg.notify_service);
 
-  renderAutomationList("checkin",  cfg.checkin_automation_ids  || [], automationEntities);
-  renderAutomationList("checkout", cfg.checkout_automation_ids || [], automationEntities);
+  renderAutomationList("checkin",    cfg.checkin_automation_ids      || [], automationEntities);
+  renderAutomationList("checkout",   cfg.checkout_automation_ids     || [], automationEntities);
+  renderAutomationList("precheckin", cfg.pre_checkin_automation_ids  || [], automationEntities);
+}
+
+function renderLockList(selected, entities) {
+  const container = document.getElementById("lock_entities");
+  container.innerHTML = "";
+  if (selected.length === 0) selected = [""];
+  selected.forEach(val => container.appendChild(buildLockRow(val, entities)));
+}
+
+function buildLockRow(value, entities) {
+  const div = document.createElement("div");
+  div.className = "automation-row";
+  const sel = document.createElement("select");
+  sel.innerHTML = `<option value="">Select lock…</option>` +
+    (entities || []).map(e =>
+      `<option value="${e.entity_id}"${e.entity_id === value ? " selected" : ""}>${esc(e.name || e.entity_id)}</option>`
+    ).join("");
+  const rm = document.createElement("button");
+  rm.type = "button"; rm.className = "auto-rm"; rm.textContent = "✕";
+  rm.onclick = () => div.remove();
+  div.appendChild(sel); div.appendChild(rm);
+  return div;
+}
+
+function addLock() {
+  document.getElementById("lock_entities").appendChild(buildLockRow("", window._lockEntities || []));
 }
 
 function maybeShowAutoHint(fieldId, entities, selectedValue, savedValue) {
@@ -351,17 +377,17 @@ async function saveSettings(e) {
 
   const data = {};
   ["ical_url", "cleaner_code"].forEach(f => data[f] = document.getElementById(f).value.trim());
-  ["poll_interval_minutes", "guest_code_slot", "cleaner_code_slot", "guest_temp", "away_temp"].forEach(f =>
+  ["poll_interval_minutes", "guest_code_slot", "cleaner_code_slot"].forEach(f =>
     data[f] = parseInt(document.getElementById(f).value, 10)
   );
   ["default_checkin_time", "default_checkout_time"].forEach(f =>
     data[f] = document.getElementById(f).value
   );
-  data.lock_entity_id       = document.getElementById("lock_entity_id").value;
-  data.thermostat_entity_id = document.getElementById("thermostat_entity_id").value;
-  data.notify_service       = document.getElementById("notify_service").value;
-  data.checkin_automation_ids  = [...document.querySelectorAll("#checkin_automations select")].map(s => s.value).filter(Boolean);
-  data.checkout_automation_ids = [...document.querySelectorAll("#checkout_automations select")].map(s => s.value).filter(Boolean);
+  data.lock_entity_ids         = [...document.querySelectorAll("#lock_entities select")].map(s => s.value).filter(Boolean);
+  data.notify_service          = document.getElementById("notify_service").value;
+  data.checkin_automation_ids      = [...document.querySelectorAll("#checkin_automations select")].map(s => s.value).filter(Boolean);
+  data.checkout_automation_ids     = [...document.querySelectorAll("#checkout_automations select")].map(s => s.value).filter(Boolean);
+  data.pre_checkin_automation_ids  = [...document.querySelectorAll("#precheckin_automations select")].map(s => s.value).filter(Boolean);
 
   const resp = await fetch("api/settings", {
     method: "POST",
