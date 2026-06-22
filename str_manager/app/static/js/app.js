@@ -31,8 +31,9 @@ document.querySelectorAll(".tab-btn-link").forEach(btn => {
 
 // ── WebSocket ──────────────────────────────────────────────────────────────
 function connectWS() {
-  const proto = location.protocol === "https:" ? "wss" : "ws";
-  const ws = new WebSocket(`${proto}://${location.host}/ws`);
+  const wsUrl = new URL("ws", location.href);
+  wsUrl.protocol = location.protocol === "https:" ? "wss:" : "ws:";
+  const ws = new WebSocket(wsUrl.href);
   const dot = document.getElementById("ws-indicator");
 
   ws.onopen  = () => { dot.className = "ws-dot connected"; };
@@ -47,8 +48,8 @@ function connectWS() {
 // ── Dashboard ──────────────────────────────────────────────────────────────
 async function loadDashboard() {
   const [status, logData] = await Promise.all([
-    fetch("/api/status").then(r => r.json()),
-    fetch("/api/activity-log?page=1&limit=5").then(r => r.json()),
+    fetch("api/status").then(r => r.json()),
+    fetch("api/activity-log?page=1&limit=5").then(r => r.json()),
   ]);
   renderStatus(status);
   renderRecentLog(logData.entries);
@@ -124,14 +125,14 @@ function toggleCode() {
 async function forceRefresh() {
   const spinner = document.getElementById("refresh-spinner");
   spinner.classList.add("spinning");
-  await fetch("/api/refresh", { method: "POST" });
+  await fetch("api/refresh", { method: "POST" });
   setTimeout(() => spinner.classList.remove("spinning"), 1500);
   setTimeout(loadDashboard, 2000);
 }
 
 // ── Upcoming Reservations ──────────────────────────────────────────────────
 async function loadReservations() {
-  const data = await fetch("/api/reservations").then(r => r.json());
+  const data = await fetch("api/reservations").then(r => r.json());
   const el   = document.getElementById("reservations-list");
   const sync = document.getElementById("res-sync-time");
 
@@ -169,7 +170,7 @@ async function loadLog(page = 1, filter = "all") {
   logCurrentFilter = filter;
   document.querySelectorAll(".filter-btn").forEach(b => b.classList.toggle("active", b.dataset.filter === filter));
 
-  const data = await fetch(`/api/activity-log?page=${page}&limit=25&type=${filter}`).then(r => r.json());
+  const data = await fetch(`api/activity-log?page=${page}&limit=25&type=${filter}`).then(r => r.json());
   logTotal = data.total;
   const el = document.getElementById("log-list");
 
@@ -209,11 +210,11 @@ document.querySelectorAll(".filter-btn").forEach(btn => {
 // ── Settings ───────────────────────────────────────────────────────────────
 async function loadSettings() {
   const [cfg, lockEntities, climateEntities, automationEntities, notifyServices] = await Promise.all([
-    fetch("/api/settings").then(r => r.json()),
-    fetch("/api/ha/entities?domain=lock").then(r => r.json()),
-    fetch("/api/ha/entities?domain=climate").then(r => r.json()),
-    fetch("/api/ha/entities?domain=automation").then(r => r.json()),
-    fetch("/api/ha/notify-services").then(r => r.json()),
+    fetch("api/settings").then(r => r.json()),
+    fetch("api/ha/entities?domain=lock").then(r => r.json()),
+    fetch("api/ha/entities?domain=climate").then(r => r.json()),
+    fetch("api/ha/entities?domain=automation").then(r => r.json()),
+    fetch("api/ha/notify-services").then(r => r.json()),
   ]);
 
   allAutomations = automationEntities;
@@ -312,7 +313,7 @@ async function saveSettings(e) {
   data.checkin_automation_ids  = [...document.querySelectorAll("#checkin_automations select")].map(s => s.value).filter(Boolean);
   data.checkout_automation_ids = [...document.querySelectorAll("#checkout_automations select")].map(s => s.value).filter(Boolean);
 
-  const resp = await fetch("/api/settings", {
+  const resp = await fetch("api/settings", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data),
