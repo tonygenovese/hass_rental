@@ -20,26 +20,34 @@ A Home Assistant OS add-on that automates short-term rental property operations 
 
 ## Installation
 
-1. SSH into your HA OS machine and copy this repository into `/addons/str_manager/`
+### Via HA Add-on Store (recommended)
+
+1. In Home Assistant go to **Settings → Add-ons → Add-on Store**
+2. Click the three-dot menu (⋮) in the top right and select **Repositories**
+3. Add this URL: `https://github.com/tonygenovese/hass_rental`
+4. Close the dialog — **Short-Term Rental Manager** will appear under a new section
+5. Click it, then click **Install**
+6. Start the add-on and enable **Show in sidebar**
+
+### Via local SSH install
 
 ```bash
 cd /addons
-git clone https://github.com/tonygenovese/hass_rental.git str_manager
+git clone https://github.com/tonygenovese/hass_rental.git
 ```
 
-2. In Home Assistant go to **Settings → Add-ons → Add-on Store**, click the three-dot menu, and select **Check for updates**
+Then reload the Add-on Store and install from the Local section.
 
-3. Find **Short-Term Rental Manager** under the Local section, click **Install**
+## Configuration
 
-4. Start the add-on and enable **Show in sidebar**
+Open **Rental Manager** in the sidebar, go to the **Settings** tab, and configure:
 
-5. Open **Rental Manager** in the sidebar, go to the **Settings** tab, and configure:
-   - Your Airbnb iCal URL
-   - Lock entity and code slot numbers
-   - Cleaner PIN (fixed)
-   - Thermostat and temperatures (optional)
-   - Notification service
-   - Check-in / check-out automations (optional)
+- Your Airbnb iCal URL
+- Lock entity and code slot numbers
+- Cleaner PIN (fixed)
+- Thermostat and temperatures (optional)
+- Notification service
+- Check-in / check-out automations (optional)
 
 ## Dashboard
 
@@ -62,6 +70,7 @@ git clone https://github.com/tonygenovese/hass_rental.git str_manager
 ## Development & Testing
 
 ```bash
+cd str_manager
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 .venv/bin/python -m pytest -v
