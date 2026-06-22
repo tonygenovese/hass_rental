@@ -2,241 +2,264 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>Rental Manager</title>
-  <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="/css/style.css" />
 </head>
-<body class="bg-gray-950 text-gray-100 min-h-screen">
+<body>
 
-  <!-- Header -->
-  <header class="bg-gray-900 border-b border-gray-800 px-4 py-3 flex items-center justify-between sticky top-0 z-10">
-    <div class="flex items-center gap-3">
-      <span class="text-2xl">🏠</span>
-      <h1 class="text-lg font-semibold tracking-tight">Rental Manager</h1>
-    </div>
-    <div class="flex items-center gap-2">
-      <span id="sync-badge" class="text-xs text-gray-500 hidden">Last sync: <span id="last-sync">—</span></span>
-      <span id="ws-indicator" class="w-2 h-2 rounded-full bg-red-500" title="Disconnected"></span>
+  <!-- ── Header ──────────────────────────────────────────────────────── -->
+  <header class="app-header">
+    <span class="app-title">Rental Manager</span>
+    <div class="header-right">
+      <span id="sync-badge" class="sync-text hidden">Synced <span id="last-sync">—</span></span>
+      <div id="ws-indicator" class="ws-dot" title="Realtime connection"></div>
+      <button class="icon-btn" onclick="forceRefresh()" title="Refresh calendar">
+        <span id="refresh-spinner">↻</span>
+      </button>
     </div>
   </header>
 
-  <!-- Tab bar -->
-  <nav class="bg-gray-900 border-b border-gray-800 flex px-2 overflow-x-auto">
-    <button class="tab-btn active" data-tab="dashboard">Dashboard</button>
-    <button class="tab-btn" data-tab="upcoming">Upcoming</button>
-    <button class="tab-btn" data-tab="log">Activity Log</button>
-    <button class="tab-btn" data-tab="settings">Settings</button>
+  <!-- ── Tab bar ─────────────────────────────────────────────────────── -->
+  <nav class="tab-bar">
+    <button class="tab-btn active" data-tab="dashboard">
+      <span class="tab-icon">🏠</span> Dashboard
+    </button>
+    <button class="tab-btn" data-tab="upcoming">
+      <span class="tab-icon">📅</span> Upcoming
+    </button>
+    <button class="tab-btn" data-tab="log">
+      <span class="tab-icon">📋</span> Activity
+    </button>
+    <button class="tab-btn" data-tab="settings">
+      <span class="tab-icon">⚙️</span> Settings
+    </button>
   </nav>
 
-  <!-- ── DASHBOARD TAB ─────────────────────────────── -->
-  <div id="tab-dashboard" class="tab-content p-4 space-y-4">
+  <!-- ══════════════════════════════════════════════════════════════════ -->
+  <!-- DASHBOARD                                                          -->
+  <!-- ══════════════════════════════════════════════════════════════════ -->
+  <div id="tab-dashboard" class="tab-content content">
 
-    <!-- Status card -->
-    <div id="status-card" class="rounded-xl p-5 border flex items-center gap-4 status-vacant">
-      <div class="text-4xl" id="status-icon">🔓</div>
+    <!-- Status hero card -->
+    <div id="status-card" class="status-hero status-vacant">
+      <div class="status-top">
+        <div class="status-icon-box"><span id="status-icon">🔓</span></div>
+        <div>
+          <div class="status-eyebrow">Property Status</div>
+          <div class="status-title" id="status-label">VACANT</div>
+        </div>
+      </div>
+
+      <!-- Active guest block (shown when occupied) -->
+      <div id="active-card" class="guest-block hidden">
+        <div class="guest-name-text" id="guest-name">—</div>
+        <div class="date-grid">
+          <div class="date-cell">
+            <div class="micro-label">Check-in</div>
+            <div class="date-val" id="checkin-time">—</div>
+          </div>
+          <div class="date-cell">
+            <div class="micro-label">Check-out</div>
+            <div class="date-val" id="checkout-time">—</div>
+          </div>
+        </div>
+        <div class="code-box">
+          <div>
+            <div class="micro-label">Guest Code</div>
+            <div class="code-val" id="guest-code">••••••</div>
+          </div>
+          <button class="reveal-btn" onclick="toggleCode()">Reveal</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Next reservation card (when vacant/cleaner) -->
+    <div id="next-card" class="next-card hidden">
+      <div class="next-icon">📅</div>
       <div>
-        <div class="text-xs uppercase tracking-widest font-semibold opacity-60 mb-1">Property Status</div>
-        <div class="text-2xl font-bold" id="status-label">VACANT</div>
+        <div class="next-label">Next Reservation</div>
+        <div class="next-name" id="next-guest-name">—</div>
+        <div class="next-time">Arrives <span id="next-checkin">—</span></div>
       </div>
     </div>
 
-    <!-- Active reservation -->
-    <div id="active-card" class="hidden bg-gray-900 rounded-xl border border-gray-800 p-4 space-y-3">
-      <div class="text-xs uppercase tracking-widest text-gray-400 font-semibold">Current Guest</div>
-      <div class="text-xl font-semibold" id="guest-name">—</div>
-      <div class="grid grid-cols-2 gap-3 text-sm">
-        <div class="bg-gray-800 rounded-lg p-3">
-          <div class="text-gray-400 text-xs mb-1">Check-in</div>
-          <div id="checkin-time" class="font-medium">—</div>
-        </div>
-        <div class="bg-gray-800 rounded-lg p-3">
-          <div class="text-gray-400 text-xs mb-1">Check-out</div>
-          <div id="checkout-time" class="font-medium">—</div>
-        </div>
-      </div>
-      <div class="bg-gray-800 rounded-lg p-3">
-        <div class="text-gray-400 text-xs mb-2">Guest Access Code</div>
-        <div class="flex items-center gap-3">
-          <div id="guest-code" class="font-mono text-2xl tracking-widest">••••••</div>
-          <button onclick="toggleCode()" class="text-xs bg-gray-700 hover:bg-gray-600 px-3 py-1 rounded-md transition">Reveal</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- Next reservation (when not occupied) -->
-    <div id="next-card" class="hidden bg-gray-900 rounded-xl border border-gray-800 p-4 space-y-3">
-      <div class="text-xs uppercase tracking-widest text-gray-400 font-semibold">Next Reservation</div>
-      <div class="text-lg font-semibold" id="next-guest-name">—</div>
-      <div class="text-sm text-gray-400">Arrives <span id="next-checkin" class="text-white font-medium">—</span></div>
-    </div>
-
-    <!-- No reservations message -->
-    <div id="no-reservations-card" class="hidden bg-gray-900 rounded-xl border border-gray-800 p-4 text-center text-gray-500 text-sm">
+    <!-- No reservations -->
+    <div id="no-reservations-card" class="hidden empty" style="padding:20px 0;">
       No upcoming reservations
     </div>
 
     <!-- Recent activity -->
-    <div class="bg-gray-900 rounded-xl border border-gray-800 p-4">
-      <div class="flex items-center justify-between mb-3">
-        <div class="text-xs uppercase tracking-widest text-gray-400 font-semibold">Recent Activity</div>
-        <button class="tab-btn-link" data-tab="log">View all →</button>
+    <div class="card">
+      <div class="card-head">
+        <span class="card-eyebrow">Recent Activity</span>
+        <button class="tab-btn-link card-link" data-tab="log">View all →</button>
       </div>
-      <ul id="recent-log" class="space-y-2 text-sm">
-        <li class="text-gray-500">Loading...</li>
-      </ul>
+      <div class="card-body">
+        <ul id="recent-log" class="log-list">
+          <li class="empty" style="padding:12px 0">Loading…</li>
+        </ul>
+      </div>
     </div>
 
-    <!-- Refresh button -->
-    <button onclick="forceRefresh()" class="w-full bg-blue-700 hover:bg-blue-600 text-white rounded-xl py-3 font-semibold transition flex items-center justify-center gap-2">
-      <span id="refresh-spinner" class="hidden">⟳</span>
-      Refresh Calendar
+    <!-- Refresh -->
+    <button class="btn-primary" onclick="forceRefresh()">
+      ↻ &nbsp;Refresh Calendar
     </button>
+
   </div>
 
-  <!-- ── UPCOMING TAB ──────────────────────────────── -->
-  <div id="tab-upcoming" class="tab-content hidden p-4 space-y-4">
-    <div class="flex items-center justify-between">
-      <h2 class="font-semibold text-gray-200">Upcoming Reservations</h2>
-      <span id="res-sync-time" class="text-xs text-gray-500">—</span>
+  <!-- ══════════════════════════════════════════════════════════════════ -->
+  <!-- UPCOMING                                                           -->
+  <!-- ══════════════════════════════════════════════════════════════════ -->
+  <div id="tab-upcoming" class="tab-content content hidden">
+    <div class="upcoming-header">
+      <span class="upcoming-title">Upcoming Reservations</span>
+      <span id="res-sync-time" class="upcoming-sync">—</span>
     </div>
-    <div id="reservations-list" class="space-y-3">
-      <div class="text-gray-500 text-sm">Loading...</div>
+    <div id="reservations-list">
+      <div class="empty">Loading…</div>
     </div>
   </div>
 
-  <!-- ── ACTIVITY LOG TAB ──────────────────────────── -->
-  <div id="tab-log" class="tab-content hidden p-4 space-y-4">
-    <div class="flex flex-wrap gap-2 items-center">
-      <span class="text-sm font-semibold text-gray-300 mr-2">Filter:</span>
+  <!-- ══════════════════════════════════════════════════════════════════ -->
+  <!-- ACTIVITY LOG                                                       -->
+  <!-- ══════════════════════════════════════════════════════════════════ -->
+  <div id="tab-log" class="tab-content content hidden">
+    <div class="filter-bar">
       <button class="filter-btn active" data-filter="all">All</button>
-      <button class="filter-btn" data-filter="checkin">Check-ins</button>
-      <button class="filter-btn" data-filter="checkout">Check-outs</button>
+      <button class="filter-btn" data-filter="checkin">Check-in</button>
+      <button class="filter-btn" data-filter="checkout">Check-out</button>
       <button class="filter-btn" data-filter="first_entry">First Entry</button>
       <button class="filter-btn" data-filter="cleaner_entry">Cleaner</button>
       <button class="filter-btn" data-filter="error">Errors</button>
     </div>
-    <div id="log-list" class="space-y-2 text-sm">
-      <div class="text-gray-500">Loading...</div>
+    <div id="log-list" class="log-list">
+      <div class="empty">Loading…</div>
     </div>
-    <div id="log-pagination" class="flex items-center justify-between hidden">
-      <button id="log-prev" onclick="logPage(-1)" class="px-3 py-1 bg-gray-800 rounded hover:bg-gray-700 text-sm disabled:opacity-40">← Prev</button>
-      <span id="log-page-info" class="text-xs text-gray-400"></span>
-      <button id="log-next" onclick="logPage(1)" class="px-3 py-1 bg-gray-800 rounded hover:bg-gray-700 text-sm disabled:opacity-40">Next →</button>
+    <div id="log-pagination" class="pagination hidden">
+      <button id="log-prev" class="page-btn" onclick="logPage(-1)">← Prev</button>
+      <span id="log-page-info" class="page-info"></span>
+      <button id="log-next" class="page-btn" onclick="logPage(1)">Next →</button>
     </div>
   </div>
 
-  <!-- ── SETTINGS TAB ──────────────────────────────── -->
-  <div id="tab-settings" class="tab-content hidden p-4 pb-24">
-    <form id="settings-form" onsubmit="saveSettings(event)" class="space-y-6">
+  <!-- ══════════════════════════════════════════════════════════════════ -->
+  <!-- SETTINGS                                                           -->
+  <!-- ══════════════════════════════════════════════════════════════════ -->
+  <div id="tab-settings" class="tab-content content hidden" style="padding-bottom:90px;">
+    <form id="settings-form" onsubmit="saveSettings(event)">
 
       <!-- Calendar -->
-      <section class="settings-section">
-        <h3 class="settings-section-title">📅 Calendar</h3>
-        <div class="space-y-4">
-          <div class="field-group">
+      <div class="settings-group">
+        <div class="settings-group-title">📅 Calendar</div>
+        <div class="settings-fields">
+          <div class="field">
             <label for="ical_url">Airbnb iCal URL</label>
-            <input type="url" id="ical_url" name="ical_url" placeholder="https://www.airbnb.com/calendar/ical/..." />
+            <input type="url" id="ical_url" placeholder="https://www.airbnb.com/calendar/ical/…" />
           </div>
-          <div class="field-group">
+          <div class="field">
             <label for="poll_interval_minutes">Sync Interval (minutes)</label>
-            <input type="number" id="poll_interval_minutes" name="poll_interval_minutes" min="5" max="1440" />
+            <input type="number" id="poll_interval_minutes" min="5" max="1440" />
           </div>
-          <div class="grid grid-cols-2 gap-3">
-            <div class="field-group">
-              <label for="default_checkin_time">Default Check-in Time</label>
-              <input type="time" id="default_checkin_time" name="default_checkin_time" />
+          <div class="field-row">
+            <div class="field">
+              <label for="default_checkin_time">Default Check-in</label>
+              <input type="time" id="default_checkin_time" />
             </div>
-            <div class="field-group">
-              <label for="default_checkout_time">Default Check-out Time</label>
-              <input type="time" id="default_checkout_time" name="default_checkout_time" />
+            <div class="field">
+              <label for="default_checkout_time">Default Check-out</label>
+              <input type="time" id="default_checkout_time" />
             </div>
           </div>
         </div>
-      </section>
+      </div>
 
       <!-- Lock -->
-      <section class="settings-section">
-        <h3 class="settings-section-title">🔐 Lock</h3>
-        <div class="space-y-4">
-          <div class="field-group">
+      <div class="settings-group">
+        <div class="settings-group-title">🔐 Lock</div>
+        <div class="settings-fields">
+          <div class="field">
             <label for="lock_entity_id">Lock Entity</label>
-            <select id="lock_entity_id" name="lock_entity_id">
-              <option value="">Loading entities...</option>
+            <select id="lock_entity_id">
+              <option value="">Loading entities…</option>
             </select>
           </div>
-          <div class="grid grid-cols-2 gap-3">
-            <div class="field-group">
+          <div class="field-row">
+            <div class="field">
               <label for="guest_code_slot">Guest Code Slot</label>
-              <input type="number" id="guest_code_slot" name="guest_code_slot" min="1" max="250" />
+              <input type="number" id="guest_code_slot" min="1" max="250" />
             </div>
-            <div class="field-group">
+            <div class="field">
               <label for="cleaner_code_slot">Cleaner Code Slot</label>
-              <input type="number" id="cleaner_code_slot" name="cleaner_code_slot" min="1" max="250" />
+              <input type="number" id="cleaner_code_slot" min="1" max="250" />
             </div>
           </div>
-          <div class="field-group">
+          <div class="field">
             <label for="cleaner_code">Cleaner PIN (fixed)</label>
-            <input type="text" id="cleaner_code" name="cleaner_code" inputmode="numeric" pattern="[0-9]*" placeholder="e.g. 123456" />
-            <p class="text-xs text-gray-500 mt-1">Leave blank to keep existing code</p>
+            <input type="text" id="cleaner_code" inputmode="numeric" pattern="[0-9]*" placeholder="e.g. 123456" />
+            <div class="field-hint">Leave blank to keep existing code</div>
           </div>
         </div>
-      </section>
+      </div>
 
       <!-- Thermostat -->
-      <section class="settings-section">
-        <h3 class="settings-section-title">🌡️ Thermostat</h3>
-        <div class="space-y-4">
-          <div class="field-group">
+      <div class="settings-group">
+        <div class="settings-group-title">🌡️ Thermostat</div>
+        <div class="settings-fields">
+          <div class="field">
             <label for="thermostat_entity_id">Thermostat Entity (optional)</label>
-            <select id="thermostat_entity_id" name="thermostat_entity_id">
-              <option value="">None</option>
+            <select id="thermostat_entity_id">
+              <option value="">None (disabled)</option>
             </select>
           </div>
-          <div class="grid grid-cols-2 gap-3">
-            <div class="field-group">
-              <label for="guest_temp">Guest Temperature (°F)</label>
-              <input type="number" id="guest_temp" name="guest_temp" min="60" max="85" />
+          <div class="field-row">
+            <div class="field">
+              <label for="guest_temp">Guest Temp (°F)</label>
+              <input type="number" id="guest_temp" min="60" max="85" />
             </div>
-            <div class="field-group">
-              <label for="away_temp">Away Temperature (°F)</label>
-              <input type="number" id="away_temp" name="away_temp" min="55" max="80" />
+            <div class="field">
+              <label for="away_temp">Away Temp (°F)</label>
+              <input type="number" id="away_temp" min="55" max="80" />
             </div>
           </div>
         </div>
-      </section>
+      </div>
 
       <!-- Notifications & Automations -->
-      <section class="settings-section">
-        <h3 class="settings-section-title">🔔 Notifications & Automations</h3>
-        <div class="space-y-4">
-          <div class="field-group">
+      <div class="settings-group">
+        <div class="settings-group-title">🔔 Notifications & Automations</div>
+        <div class="settings-fields">
+          <div class="field">
             <label for="notify_service">Notify Service</label>
-            <select id="notify_service" name="notify_service">
-              <option value="">Loading...</option>
+            <select id="notify_service">
+              <option value="">Loading…</option>
             </select>
           </div>
-          <div class="field-group">
+          <div class="field">
             <label>Check-in Automations</label>
-            <div id="checkin_automations" class="automation-list space-y-2"></div>
-            <button type="button" onclick="addAutomation('checkin')" class="mt-2 text-sm text-blue-400 hover:text-blue-300">+ Add check-in automation</button>
+            <div id="checkin_automations"></div>
+            <button type="button" class="add-auto" onclick="addAutomation('checkin')">
+              + Add automation
+            </button>
           </div>
-          <div class="field-group">
+          <div class="field">
             <label>Check-out Automations</label>
-            <div id="checkout_automations" class="automation-list space-y-2"></div>
-            <button type="button" onclick="addAutomation('checkout')" class="mt-2 text-sm text-blue-400 hover:text-blue-300">+ Add check-out automation</button>
+            <div id="checkout_automations"></div>
+            <button type="button" class="add-auto" onclick="addAutomation('checkout')">
+              + Add automation
+            </button>
           </div>
         </div>
-      </section>
-
-      <!-- Save -->
-      <div class="fixed bottom-0 left-0 right-0 bg-gray-950 border-t border-gray-800 p-4">
-        <div id="save-status" class="text-sm text-center mb-2 hidden"></div>
-        <button type="submit" class="w-full bg-green-700 hover:bg-green-600 text-white rounded-xl py-3 font-semibold transition">
-          Save Settings
-        </button>
       </div>
+
     </form>
+
+    <!-- Fixed save bar -->
+    <div class="save-bar">
+      <div id="save-status" class="save-msg hidden"></div>
+      <button type="submit" form="settings-form" class="btn-save">Save Settings</button>
+    </div>
   </div>
 
   <script src="/js/app.js"></script>
