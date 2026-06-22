@@ -1,6 +1,6 @@
 name: "Short-Term Rental Manager"
 description: "Airbnb calendar sync, Z-Wave lock code automation, thermostat control, and rental dashboard"
-version: "1.0.1"
+version: "1.0.2"
 slug: "str_manager"
 init: false
 arch:
