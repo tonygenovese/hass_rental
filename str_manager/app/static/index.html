@@ -31,6 +31,9 @@
     <button class="tab-btn" data-tab="log">
       <span class="tab-icon">📋</span> Activity
     </button>
+    <button class="tab-btn" data-tab="actions">
+      <span class="tab-icon">⚡</span> Actions
+    </button>
     <button class="tab-btn" data-tab="settings">
       <span class="tab-icon">⚙️</span> Settings
     </button>
@@ -142,6 +145,22 @@
       <span id="log-page-info" class="page-info"></span>
       <button id="log-next" class="page-btn" onclick="logPage(1)">Next →</button>
     </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════════════ -->
+  <!-- ACTIONS                                                            -->
+  <!-- ══════════════════════════════════════════════════════════════════ -->
+  <div id="tab-actions" class="tab-content content hidden">
+    <div class="actions-header">
+      <div class="actions-title">Upcoming Actions</div>
+      <div class="actions-subtitle">Automations scheduled from your calendar</div>
+    </div>
+    <div id="actions-list">
+      <div class="empty">Loading…</div>
+    </div>
+    <button id="load-more-btn" class="btn-load-more hidden" onclick="loadMoreActions()">
+      Load next 5
+    </button>
   </div>
 
   <!-- ══════════════════════════════════════════════════════════════════ -->

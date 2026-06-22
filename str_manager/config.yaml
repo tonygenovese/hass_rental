@@ -1,6 +1,6 @@
 name: "Short-Term Rental Manager"
 description: "Airbnb calendar sync, Z-Wave lock code automation, thermostat control, and rental dashboard"
-version: "1.0.3"
+version: "1.0.4"
 slug: "str_manager"
 init: false
 arch:
@@ -8,7 +8,7 @@ arch:
   - amd64
 ingress: true
 ingress_port: 8099
-panel_icon: mdi:home-key
+panel_icon: mdi:home-lock
 panel_title: "Rental Manager"
 homeassistant_api: true
 options: {}

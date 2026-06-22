@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import random
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -210,6 +210,71 @@ async def handle_lock_event(event_data: dict[str, Any]) -> None:
         await notifier.send(notify_svc, "Cleaner Entry", msg, "str_mgr_cleaner_entry")
         activity_log.add("cleaner_entry", msg)
         await _broadcast({"type": "log_update", "data": activity_log.recent(5)})
+
+
+def get_upcoming_actions(limit: int = 5, offset: int = 0) -> dict:
+    cfg = settings.load()
+    lock_id       = cfg.get("lock_entity_id", "")
+    guest_slot    = cfg.get("guest_code_slot", 2)
+    cleaner_slot  = cfg.get("cleaner_code_slot", 3)
+    cleaner_code  = cfg.get("cleaner_code", "")
+    thermostat_id = cfg.get("thermostat_entity_id", "")
+    guest_temp    = cfg.get("guest_temp", 72)
+    away_temp     = cfg.get("away_temp", 65)
+    notify_svc    = cfg.get("notify_service", "")
+    checkin_autos = cfg.get("checkin_automation_ids", [])
+    checkout_autos = cfg.get("checkout_automation_ids", [])
+
+    now = datetime.now(timezone.utc)
+    relevant = [r for r in _reservations if r.check_out > now]
+    actions: list[dict] = []
+
+    for i, r in enumerate(relevant):
+        next_r = relevant[i + 1] if i + 1 < len(relevant) else None
+        prev_r = relevant[i - 1] if i > 0 else None
+        is_cleaner_after = next_r is not None and (next_r.check_in - r.check_out) < timedelta(hours=24)
+        is_after_cleaner = prev_r is not None and (r.check_in - prev_r.check_out) < timedelta(hours=24)
+
+        if r.check_in > now:
+            steps: list[dict] = []
+            if lock_id:
+                if is_after_cleaner:
+                    steps.append({"icon": "🔓", "text": f"Clear cleaner code from slot {cleaner_slot}"})
+                steps.append({"icon": "🔐", "text": f"Set guest code in slot {guest_slot}"})
+            if thermostat_id:
+                steps.append({"icon": "🌡️", "text": f"Set thermostat to {guest_temp}°F"})
+            if notify_svc:
+                steps.append({"icon": "🔔", "text": "Send check-in notification"})
+            if checkin_autos:
+                steps.append({"icon": "⚡", "text": f"Trigger {len(checkin_autos)} check-in automation(s)"})
+            actions.append({
+                "scheduled_at": r.check_in.isoformat(),
+                "type": "checkin",
+                "guest": r.guest_name,
+                "steps": steps,
+            })
+
+        steps = []
+        if lock_id:
+            steps.append({"icon": "🔓", "text": f"Clear guest code from slot {guest_slot}"})
+            if is_cleaner_after and cleaner_code:
+                steps.append({"icon": "🔐", "text": f"Set cleaner code in slot {cleaner_slot}"})
+        if thermostat_id:
+            steps.append({"icon": "🌡️", "text": f"Set thermostat to {away_temp}°F (away)"})
+        if notify_svc:
+            lbl = " · cleaner mode" if is_cleaner_after else ""
+            steps.append({"icon": "🔔", "text": f"Send check-out notification{lbl}"})
+        if checkout_autos:
+            steps.append({"icon": "⚡", "text": f"Trigger {len(checkout_autos)} check-out automation(s)"})
+        actions.append({
+            "scheduled_at": r.check_out.isoformat(),
+            "type": "cleaner_start" if is_cleaner_after else "checkout",
+            "guest": r.guest_name,
+            "steps": steps,
+        })
+
+    total = len(actions)
+    return {"actions": actions[offset: offset + limit], "total": total, "offset": offset, "limit": limit}
 
 
 def start(poll_interval_minutes: int = 30) -> None:

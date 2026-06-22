@@ -397,6 +397,44 @@ ul, ol { list-style: none; }
 .btn-save:hover { opacity: .9; }
 .btn-save:active { transform: scale(.98); }
 
+/* ── Actions tab ───────────────────────────────────────────────────────── */
+.actions-header { margin-bottom: 16px; }
+.actions-title  { font-size: 16px; font-weight: 600; }
+.actions-subtitle { font-size: 12px; color: var(--t3); margin-top: 2px; }
+
+.action-card {
+  background: var(--s1); border: 1px solid var(--border);
+  border-radius: var(--r-lg); padding: 15px; margin-bottom: 10px;
+}
+.action-card-header {
+  display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;
+}
+.action-type-badge {
+  font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+  padding: 3px 10px; border-radius: 20px;
+}
+.type-checkin       { background: var(--green-bg);  color: #34d399; border: 1px solid rgba(16,185,129,.25); }
+.type-checkout      { background: var(--accent-bg); color: #93c5fd; border: 1px solid rgba(59,130,246,.25); }
+.type-cleaner_start { background: var(--amber-bg);  color: #fbbf24; border: 1px solid rgba(245,158,11,.25); }
+.action-time  { font-size: 12px; color: var(--t3); }
+.action-guest { font-size: 14px; font-weight: 600; color: var(--t1); margin-bottom: 10px; }
+.action-steps { display: flex; flex-direction: column; gap: 5px; }
+.action-step {
+  display: flex; align-items: center; gap: 9px;
+  font-size: 13px; color: var(--t2);
+  background: var(--s2); border-radius: var(--r-sm); padding: 7px 10px;
+}
+.step-icon { font-size: 14px; flex-shrink: 0; }
+
+.btn-load-more {
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  width: 100%; padding: 13px; border-radius: var(--r-lg);
+  background: var(--s2); color: var(--t2); border: 1px solid var(--border);
+  font-size: 14px; font-weight: 500; margin-top: 4px;
+  transition: background .15s, color .15s;
+}
+.btn-load-more:hover { background: var(--s3); color: var(--t1); }
+
 /* ── Empty / loading states ────────────────────────────────────────────── */
 .empty { text-align: center; padding: 36px 16px; color: var(--t3); font-size: 14px; }
 

@@ -6,6 +6,8 @@ let codeVisible = false;
 let logCurrentPage = 1;
 let logCurrentFilter = "all";
 let logTotal = 0;
+let actionsOffset = 0;
+const ACTIONS_LIMIT = 5;
 
 const LOG_ICONS = {
   checkin: "🏠", checkout: "🚪", first_entry: "🔑", cleaner_entry: "🧹",
@@ -19,6 +21,7 @@ function showTab(name) {
   document.querySelectorAll(".tab-content").forEach(el => el.classList.toggle("hidden", el.id !== `tab-${name}`));
   if (name === "upcoming") loadReservations();
   if (name === "log")      loadLog(1, logCurrentFilter);
+  if (name === "actions")  loadActions();
   if (name === "settings") loadSettings();
 }
 
@@ -206,6 +209,53 @@ function logPage(delta) { loadLog(logCurrentPage + delta, logCurrentFilter); }
 document.querySelectorAll(".filter-btn").forEach(btn => {
   btn.addEventListener("click", () => loadLog(1, btn.dataset.filter));
 });
+
+// ── Upcoming Actions ───────────────────────────────────────────────────────
+async function loadActions(append = false) {
+  if (!append) {
+    actionsOffset = 0;
+    document.getElementById("actions-list").innerHTML = '<div class="empty">Loading…</div>';
+  }
+
+  const data = await fetch(`api/upcoming-actions?limit=${ACTIONS_LIMIT}&offset=${actionsOffset}`).then(r => r.json());
+  const el = document.getElementById("actions-list");
+  const btn = document.getElementById("load-more-btn");
+
+  if (!data.actions || data.actions.length === 0) {
+    if (!append) {
+      el.innerHTML = '<div class="empty">No upcoming actions.<br>Add an iCal URL in Settings to get started.</div>';
+    }
+    btn.classList.add("hidden");
+    return;
+  }
+
+  const html = data.actions.map(a => `
+    <div class="action-card">
+      <div class="action-card-header">
+        <div class="action-type-badge type-${a.type}">${actionTypeLabel(a.type)}</div>
+        <div class="action-time">${formatDateTime(a.scheduled_at)}</div>
+      </div>
+      <div class="action-guest">${esc(a.guest)}</div>
+      <ul class="action-steps">
+        ${a.steps.map(s => `<li class="action-step"><span class="step-icon">${s.icon}</span>${esc(s.text)}</li>`).join("")}
+      </ul>
+    </div>`).join("");
+
+  if (append) {
+    el.insertAdjacentHTML("beforeend", html);
+  } else {
+    el.innerHTML = html;
+  }
+
+  actionsOffset += data.actions.length;
+  btn.classList.toggle("hidden", actionsOffset >= data.total);
+}
+
+function loadMoreActions() { loadActions(true); }
+
+function actionTypeLabel(type) {
+  return { checkin: "Check-in", checkout: "Check-out", cleaner_start: "Cleaner" }[type] || type;
+}
 
 // ── Settings ───────────────────────────────────────────────────────────────
 async function loadSettings() {

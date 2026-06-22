@@ -98,6 +98,11 @@ async def api_notify_services():
     return [{"service": n, "label": n.replace("_", " ").title()} for n in names]
 
 
+@app.get("/api/upcoming-actions")
+async def api_upcoming_actions(limit: int = 5, offset: int = 0):
+    return scheduler.get_upcoming_actions(limit, offset)
+
+
 @app.post("/api/refresh")
 async def api_refresh():
     asyncio.create_task(scheduler.poll())
