@@ -1,0 +1,229 @@
+import asyncio
+import logging
+import random
+from datetime import datetime, timezone
+from typing import Any
+
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+from . import activity_log, automations, ha_client, lock_manager, notifier, settings, thermostat
+from .ical_parser import Reservation, fetch_reservations
+from .state_machine import RentalState, determine_state
+
+logger = logging.getLogger(__name__)
+
+_scheduler = AsyncIOScheduler()
+_state: RentalState = RentalState.VACANT
+_reservations: list[Reservation] = []
+_active_reservation: Reservation | None = None
+_next_reservation: Reservation | None = None
+_active_guest_code: str = ""
+_guest_first_entry_logged: bool = False
+_last_sync: datetime | None = None
+# WebSocket broadcast hook (set by main.py)
+broadcast_hook: Any = None
+
+
+def get_status() -> dict[str, Any]:
+    active = _active_reservation
+    nxt = _next_reservation
+    return {
+        "state": _state,
+        "current_guest": active.guest_name if active else None,
+        "check_in": active.check_in.isoformat() if active else None,
+        "check_out": active.check_out.isoformat() if active else None,
+        "guest_code": _active_guest_code if active else None,
+        "next_guest": nxt.guest_name if nxt else None,
+        "next_check_in": nxt.check_in.isoformat() if nxt else None,
+        "last_sync": _last_sync.isoformat() if _last_sync else None,
+    }
+
+
+def get_reservations() -> list[dict[str, Any]]:
+    now = datetime.now(timezone.utc)
+    return [
+        {
+            "guest_name": r.guest_name,
+            "check_in": r.check_in.isoformat(),
+            "check_out": r.check_out.isoformat(),
+            "duration_nights": max(1, (r.check_out.date() - r.check_in.date()).days),
+            "is_active": r.is_active(now),
+        }
+        for r in _reservations
+        if r.check_out > now
+    ]
+
+
+async def _broadcast(msg: dict[str, Any]) -> None:
+    if broadcast_hook:
+        await broadcast_hook(msg)
+
+
+async def _handle_transition(old: RentalState, new: RentalState, reservation: Reservation | None) -> None:
+    global _active_guest_code, _guest_first_entry_logged
+    cfg = settings.load()
+
+    lock_id = cfg.get("lock_entity_id", "")
+    guest_slot = cfg.get("guest_code_slot", 2)
+    cleaner_slot = cfg.get("cleaner_code_slot", 3)
+    cleaner_code = cfg.get("cleaner_code", "")
+    thermostat_id = cfg.get("thermostat_entity_id", "")
+    guest_temp = cfg.get("guest_temp", 72)
+    away_temp = cfg.get("away_temp", 65)
+    notify_svc = cfg.get("notify_service", "")
+
+    guest_name = reservation.guest_name if reservation else "Guest"
+
+    if new == RentalState.OCCUPIED:
+        _guest_first_entry_logged = False
+        _active_guest_code = str(random.randint(100000, 999999))
+
+        if lock_id:
+            await lock_manager.set_code(lock_id, guest_slot, _active_guest_code)
+            activity_log.add("code_set", f"Guest code set in slot {guest_slot}: {_active_guest_code}", guest_name)
+
+        if old == RentalState.CLEANER and lock_id:
+            await lock_manager.clear_code(lock_id, cleaner_slot)
+            activity_log.add("code_cleared", f"Cleaner code cleared from slot {cleaner_slot}")
+
+        if thermostat_id:
+            await thermostat.set_temperature(thermostat_id, guest_temp)
+            activity_log.add("thermostat", f"Thermostat set to {guest_temp}°F for guest arrival")
+
+        msg = f"Guest checked in. Access code: {_active_guest_code}"
+        await notifier.send(notify_svc, f"Check-in: {guest_name}", msg, "str_mgr_checkin")
+        activity_log.add("checkin", f"{guest_name} checked in. Code: {_active_guest_code}", guest_name)
+
+        await automations.trigger(cfg.get("checkin_automation_ids", []))
+
+    elif new == RentalState.CLEANER and old != RentalState.OCCUPIED:
+        # HA restarted while between back-to-back reservations — just set the cleaner code
+        if lock_id and cleaner_code:
+            await lock_manager.set_code(lock_id, cleaner_slot, cleaner_code)
+            activity_log.add("code_set", f"Cleaner code restored in slot {cleaner_slot} (startup recovery)")
+
+    elif old == RentalState.OCCUPIED and new in (RentalState.VACANT, RentalState.CLEANER):
+        if lock_id:
+            await lock_manager.clear_code(lock_id, guest_slot)
+            activity_log.add("code_cleared", f"Guest code cleared from slot {guest_slot}", guest_name)
+
+        if new == RentalState.CLEANER and lock_id and cleaner_code:
+            await lock_manager.set_code(lock_id, cleaner_slot, cleaner_code)
+            activity_log.add("code_set", f"Cleaner code set in slot {cleaner_slot}")
+
+        if thermostat_id:
+            await thermostat.set_temperature(thermostat_id, away_temp)
+            activity_log.add("thermostat", f"Thermostat set to {away_temp}°F (away)")
+
+        if new == RentalState.CLEANER:
+            await notifier.send(notify_svc, "Guest Checked Out", "Cleaner mode active.", "str_mgr_checkout")
+            activity_log.add("checkout", f"{guest_name} checked out. Cleaner mode active.", guest_name)
+        else:
+            await notifier.send(notify_svc, "Guest Checked Out", "Property is vacant.", "str_mgr_checkout")
+            activity_log.add("checkout", f"{guest_name} checked out. Property vacant.", guest_name)
+
+        _active_guest_code = ""
+        await automations.trigger(cfg.get("checkout_automation_ids", []))
+
+    await _broadcast({"type": "status_update", "data": get_status()})
+    await _broadcast({"type": "log_update", "data": activity_log.recent(5)})
+
+
+async def poll() -> None:
+    global _state, _reservations, _active_reservation, _next_reservation, _last_sync
+    cfg = settings.load()
+    ical_url = cfg.get("ical_url", "")
+
+    if not ical_url:
+        return
+
+    try:
+        _reservations = await fetch_reservations(
+            ical_url,
+            cfg.get("default_checkin_time", "15:00"),
+            cfg.get("default_checkout_time", "11:00"),
+        )
+        _last_sync = datetime.now(timezone.utc)
+    except Exception as exc:
+        logger.error("iCal fetch failed: %s", exc)
+        activity_log.add("error", f"Calendar sync failed: {exc}")
+        await _broadcast({"type": "log_update", "data": activity_log.recent(5)})
+        return
+
+    now = datetime.now(timezone.utc)
+    new_state = determine_state(_reservations, now)
+
+    active = next((r for r in _reservations if r.is_active(now)), None)
+    future = [r for r in _reservations if r.check_in > now]
+    nxt = future[0] if future else None
+
+    _active_reservation = active
+    _next_reservation = nxt
+
+    if new_state != _state:
+        old_state = _state
+        _state = new_state
+        relevant = active or nxt
+        asyncio.create_task(_handle_transition(old_state, new_state, relevant))
+    else:
+        await _broadcast({"type": "status_update", "data": get_status()})
+
+
+async def handle_lock_event(event_data: dict[str, Any]) -> None:
+    global _guest_first_entry_logged
+    cfg = settings.load()
+    lock_id = cfg.get("lock_entity_id", "")
+    if not lock_id:
+        return
+
+    lock_state = await ha_client.get_state(lock_id)
+    if not lock_state:
+        return
+
+    lock_attrs = lock_state.get("attributes", {})
+    node_id = lock_attrs.get("node_id")
+
+    event_node = event_data.get("node_id")
+    if event_node != node_id:
+        return
+
+    notification_type = event_data.get("parameters", {}).get("notificationType")
+    event_type = event_data.get("parameters", {}).get("eventType")
+    user_id = event_data.get("parameters", {}).get("userId")
+
+    if notification_type != 6 or event_type != 6:
+        return
+
+    guest_slot = cfg.get("guest_code_slot", 2)
+    cleaner_slot = cfg.get("cleaner_code_slot", 3)
+    notify_svc = cfg.get("notify_service", "")
+    guest_name = _active_reservation.guest_name if _active_reservation else "Guest"
+
+    if user_id == guest_slot and not _guest_first_entry_logged:
+        _guest_first_entry_logged = True
+        msg = f"{guest_name} has arrived and used their code for the first time."
+        await notifier.send(notify_svc, "Guest Arrived!", msg, "str_mgr_first_entry")
+        activity_log.add("first_entry", msg, guest_name)
+        await _broadcast({"type": "log_update", "data": activity_log.recent(5)})
+    elif user_id == cleaner_slot:
+        msg = "Cleaner entered the property."
+        await notifier.send(notify_svc, "Cleaner Entry", msg, "str_mgr_cleaner_entry")
+        activity_log.add("cleaner_entry", msg)
+        await _broadcast({"type": "log_update", "data": activity_log.recent(5)})
+
+
+def start(poll_interval_minutes: int = 30) -> None:
+    _scheduler.add_job(poll, "interval", minutes=poll_interval_minutes, id="ical_poll", replace_existing=True)
+    if not _scheduler.running:
+        _scheduler.start()
+    logger.info("Scheduler started with %d-minute poll interval", poll_interval_minutes)
+
+
+def restart(poll_interval_minutes: int) -> None:
+    _scheduler.reschedule_job("ical_poll", trigger="interval", minutes=poll_interval_minutes)
+    logger.info("Scheduler rescheduled to %d-minute interval", poll_interval_minutes)
+
+
+def stop() -> None:
+    if _scheduler.running:
+        _scheduler.shutdown(wait=False)
