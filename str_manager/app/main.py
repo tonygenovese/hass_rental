@@ -187,6 +187,8 @@ async def api_refresh():
 @app.post("/api/reload-store")
 async def api_reload_store():
     ok = await ha_client.reload_addon_store()
+    if ok:
+        await asyncio.sleep(4)  # wait for HA to finish fetching before we respond
     return {"ok": ok}
 
 

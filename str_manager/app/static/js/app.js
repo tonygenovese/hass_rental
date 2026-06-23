@@ -593,12 +593,16 @@ async function saveSettings(e) {
 async function reloadAddonStore() {
   const btn = document.querySelector(".btn-check-update");
   const orig = btn.textContent;
-  btn.textContent = "Checking…";
+  btn.textContent = "Fetching from GitHub…";
   btn.disabled = true;
-  const resp = await fetch("api/reload-store", { method: "POST" });
-  const data = await resp.json();
-  btn.textContent = data.ok ? "✓ Done — check HA for updates" : "✗ Failed";
-  setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 3000);
+  try {
+    const resp = await fetch("api/reload-store", { method: "POST" });
+    const data = await resp.json();
+    btn.textContent = data.ok ? "✓ Done — go to Add-on Info → Update" : "✗ Supervisor call failed";
+  } catch {
+    btn.textContent = "✗ Request failed";
+  }
+  setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 5000);
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────

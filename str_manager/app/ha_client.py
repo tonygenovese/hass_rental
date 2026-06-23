@@ -76,7 +76,7 @@ async def reload_addon_store() -> bool:
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(
-                f"{SUPERVISOR_URL}/store",
+                f"{SUPERVISOR_URL}/store/reload",
                 headers=_headers(),
             ) as resp:
                 return resp.status < 400
