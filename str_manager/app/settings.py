@@ -4,6 +4,39 @@ from typing import Any
 
 SETTINGS_PATH = "/data/settings.json"
 
+_NOTIF_DEFAULTS: dict[str, Any] = {
+    "checkin": {
+        "enabled": True,
+        "title": "Ready for {guest}",
+        "message": "Check-in tasks done for {guest}. Code {code} set in slot {slot}.",
+    },
+    "checkout_vacant": {
+        "enabled": True,
+        "title": "Check-out Complete",
+        "message": "Check-out tasks done for {guest}. Guest code cleared. Property is vacant.",
+    },
+    "checkout_cleaner": {
+        "enabled": True,
+        "title": "Check-out Complete",
+        "message": "Check-out tasks done for {guest}. Guest code cleared. Cleaner mode active.",
+    },
+    "guest_arrived": {
+        "enabled": True,
+        "title": "Guest Arrived!",
+        "message": "{guest} has arrived and used their code for the first time.",
+    },
+    "cleaner_arrived": {
+        "enabled": True,
+        "title": "Cleaner Arrived",
+        "message": "Cleaner entered the property.",
+    },
+    "cleaner_left": {
+        "enabled": True,
+        "title": "Cleaner Left",
+        "message": "Cleaner locked up and left the property.",
+    },
+}
+
 DEFAULTS: dict[str, Any] = {
     "ical_url": "",
     "poll_interval_minutes": 30,
@@ -20,6 +53,7 @@ DEFAULTS: dict[str, Any] = {
     "pre_checkin_automation_ids": [],
     "thermostat_entity_ids": [],
     "water_valve_entity_id": "",
+    "notifications": _NOTIF_DEFAULTS,
 }
 
 
@@ -29,6 +63,12 @@ def load() -> dict[str, Any]:
     with open(SETTINGS_PATH) as f:
         stored = json.load(f)
     merged = {**DEFAULTS, **stored}
+    # Deep-merge notifications so new keys get defaults and existing keys get per-field updates
+    stored_notifs = stored.get("notifications", {})
+    merged["notifications"] = {}
+    for key, default_val in _NOTIF_DEFAULTS.items():
+        stored_val = stored_notifs.get(key, {})
+        merged["notifications"][key] = {**default_val, **stored_val}
     # Migrate single lock_entity_id → lock_entity_ids
     if merged.get("lock_entity_id") and not merged["lock_entity_ids"]:
         merged["lock_entity_ids"] = [merged["lock_entity_id"]]

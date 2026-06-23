@@ -36,6 +36,12 @@ def _load_state() -> None:
         logger.error("Failed to load runtime state: %s", exc)
 
 
+def _render(template: str, **kwargs: Any) -> str:
+    for k, v in kwargs.items():
+        template = template.replace(f"{{{k}}}", str(v))
+    return template
+
+
 _scheduler = AsyncIOScheduler()
 _state: RentalState = RentalState.VACANT
 _reservations: list[Reservation] = []
@@ -44,6 +50,7 @@ _next_reservation: Reservation | None = None
 _active_guest_code: str = ""
 _guest_first_entry_logged: bool = False
 _cleaner_present: bool = False
+_last_active_guest: str = ""
 _last_sync: datetime | None = None
 # WebSocket broadcast hook (set by main.py)
 broadcast_hook: Any = None
@@ -107,7 +114,7 @@ async def _broadcast(msg: dict[str, Any]) -> None:
 
 
 async def _handle_transition(old: RentalState, new: RentalState, reservation: Reservation | None) -> None:
-    global _active_guest_code, _guest_first_entry_logged, _cleaner_present
+    global _active_guest_code, _guest_first_entry_logged, _cleaner_present, _last_active_guest
     cfg = settings.load()
 
     lock_ids     = cfg.get("lock_entity_ids", [])
@@ -122,6 +129,7 @@ async def _handle_transition(old: RentalState, new: RentalState, reservation: Re
     if new == RentalState.OCCUPIED:
         _guest_first_entry_logged = False
         _cleaner_present = False
+        _last_active_guest = guest_name
         # Use phone last 4 as the access code; fall back to random 4-digit PIN
         if reservation and reservation.phone_last4:
             _active_guest_code = reservation.phone_last4
@@ -141,10 +149,14 @@ async def _handle_transition(old: RentalState, new: RentalState, reservation: Re
                     await lock_manager.clear_code(lid, cleaner_slot)
             activity_log.add("code_cleared", f"{pfx}Cleaner code cleared from slot {cleaner_slot}")
 
+        notifs = cfg.get("notifications", {})
+        n_ci = notifs.get("checkin", {})
         slot_info = f"slot {guest_slot}" if lock_ids else "no lock configured"
-        msg = f"Check-in tasks done for {guest_name}. Code {_active_guest_code} set in {slot_info}."
-        if not dry:
-            await notifier.send(notify_svc, f"Ready for {guest_name}", msg, "str_mgr_checkin")
+        ci_title = _render(n_ci.get("title", "Ready for {guest}"), guest=guest_name)
+        ci_msg   = _render(n_ci.get("message", "Check-in tasks done for {guest}. Code {code} set in slot {slot}."),
+                           guest=guest_name, code=_active_guest_code, slot=guest_slot)
+        if not dry and n_ci.get("enabled", True):
+            await notifier.send(notify_svc, ci_title, ci_msg, "str_mgr_checkin")
         activity_log.add("checkin", f"{pfx}Check-in tasks complete — {guest_name}. Code {_active_guest_code} set in {slot_info}.", guest_name)
         if not dry:
             await automations.trigger(cfg.get("checkin_automation_ids", []))
@@ -160,11 +172,13 @@ async def _handle_transition(old: RentalState, new: RentalState, reservation: Re
 
     elif old == RentalState.OCCUPIED and new in (RentalState.VACANT, RentalState.CLEANER):
         _cleaner_present = False
+        outgoing = _last_active_guest or guest_name
+        notifs = cfg.get("notifications", {})
         if lock_ids:
             if not dry:
                 for lid in lock_ids:
                     await lock_manager.clear_code(lid, guest_slot)
-            activity_log.add("code_cleared", f"{pfx}Guest code cleared from slot {guest_slot}", guest_name)
+            activity_log.add("code_cleared", f"{pfx}Guest code cleared from slot {guest_slot}", outgoing)
 
         if new == RentalState.CLEANER:
             if lock_ids and cleaner_code:
@@ -172,15 +186,19 @@ async def _handle_transition(old: RentalState, new: RentalState, reservation: Re
                     for lid in lock_ids:
                         await lock_manager.set_code(lid, cleaner_slot, cleaner_code)
                 activity_log.add("code_set", f"{pfx}Cleaner code set in slot {cleaner_slot}")
-            co_msg = f"Check-out tasks done for {guest_name}. Guest code cleared. Cleaner mode active."
-            if not dry:
-                await notifier.send(notify_svc, "Check-out Complete", co_msg, "str_mgr_checkout")
-            activity_log.add("checkout", f"{pfx}{co_msg}", guest_name)
+            n_co = notifs.get("checkout_cleaner", {})
+            co_title = _render(n_co.get("title", "Check-out Complete"), guest=outgoing)
+            co_msg   = _render(n_co.get("message", "Check-out tasks done for {guest}. Guest code cleared. Cleaner mode active."), guest=outgoing)
+            if not dry and n_co.get("enabled", True):
+                await notifier.send(notify_svc, co_title, co_msg, "str_mgr_checkout")
+            activity_log.add("checkout", f"{pfx}Check-out tasks done for {outgoing}. Guest code cleared. Cleaner mode active.", outgoing)
         else:
-            co_msg = f"Check-out tasks done for {guest_name}. Guest code cleared. Property is vacant."
-            if not dry:
-                await notifier.send(notify_svc, "Check-out Complete", co_msg, "str_mgr_checkout")
-            activity_log.add("checkout", f"{pfx}{co_msg}", guest_name)
+            n_co = notifs.get("checkout_vacant", {})
+            co_title = _render(n_co.get("title", "Check-out Complete"), guest=outgoing)
+            co_msg   = _render(n_co.get("message", "Check-out tasks done for {guest}. Guest code cleared. Property is vacant."), guest=outgoing)
+            if not dry and n_co.get("enabled", True):
+                await notifier.send(notify_svc, co_title, co_msg, "str_mgr_checkout")
+            activity_log.add("checkout", f"{pfx}Check-out tasks done for {outgoing}. Guest code cleared. Property is vacant.", outgoing)
 
         _active_guest_code = ""
         _save_state()
@@ -264,17 +282,24 @@ async def handle_lock_event(event_data: dict[str, Any]) -> None:
     notify_svc   = cfg.get("notify_service", "")
     guest_name   = _active_reservation.guest_name if _active_reservation else "Guest"
 
+    notifs = cfg.get("notifications", {})
     if event_type == 6:  # Keypad unlock
         if user_id == guest_slot and not _guest_first_entry_logged:
             _guest_first_entry_logged = True
-            msg = f"{guest_name} has arrived and used their code for the first time."
-            await notifier.send(notify_svc, "Guest Arrived!", msg, "str_mgr_first_entry")
+            n_ga  = notifs.get("guest_arrived", {})
+            msg   = _render(n_ga.get("message", "{guest} has arrived and used their code for the first time."), guest=guest_name)
+            title = _render(n_ga.get("title", "Guest Arrived!"), guest=guest_name)
+            if n_ga.get("enabled", True):
+                await notifier.send(notify_svc, title, msg, "str_mgr_first_entry")
             activity_log.add("first_entry", msg, guest_name)
             await _broadcast({"type": "log_update", "data": activity_log.recent(5)})
         elif user_id == cleaner_slot and not _cleaner_present:
             _cleaner_present = True
-            msg = "Cleaner entered the property."
-            await notifier.send(notify_svc, "Cleaner Arrived", msg, "str_mgr_cleaner_entry")
+            n_ca  = notifs.get("cleaner_arrived", {})
+            msg   = n_ca.get("message", "Cleaner entered the property.")
+            title = n_ca.get("title", "Cleaner Arrived")
+            if n_ca.get("enabled", True):
+                await notifier.send(notify_svc, title, msg, "str_mgr_cleaner_entry")
             activity_log.add("cleaner_entry", msg)
             await _broadcast({"type": "log_update", "data": activity_log.recent(5)})
 
@@ -282,9 +307,11 @@ async def handle_lock_event(event_data: dict[str, Any]) -> None:
         _cleaner_present = False
         dry = addon_options.test_mode()
         pfx = "[TEST] " if dry else ""
-        msg = "Cleaner locked up and left the property."
-        if not dry:
-            await notifier.send(notify_svc, "Cleaner Left", msg, "str_mgr_cleaner_exit")
+        n_cl  = notifs.get("cleaner_left", {})
+        msg   = n_cl.get("message", "Cleaner locked up and left the property.")
+        title = n_cl.get("title", "Cleaner Left")
+        if not dry and n_cl.get("enabled", True):
+            await notifier.send(notify_svc, title, msg, "str_mgr_cleaner_exit")
         activity_log.add("cleaner_entry", f"{pfx}{msg}")
         pre_autos = cfg.get("pre_checkin_automation_ids", [])
         if pre_autos:
@@ -351,6 +378,7 @@ def get_upcoming_actions(limit: int = 5, offset: int = 0) -> dict:
             "scheduled_at": r.check_out.isoformat(),
             "type": "cleaner_start" if is_cleaner_after else "checkout",
             "guest": r.guest_name,
+            "next_guest": next_r.guest_name if is_cleaner_after and next_r else None,
             "steps": steps,
         })
 

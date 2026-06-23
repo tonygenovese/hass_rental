@@ -337,6 +337,173 @@
         </div>
       </div>
 
+      <!-- Notification Messages -->
+      <div class="settings-group">
+        <div class="settings-group-title">💬 Notification Messages</div>
+        <div class="settings-fields">
+          <p class="field-hint" style="margin-top:2px;">Customize push notifications. Click a chip to insert that variable at the cursor.</p>
+
+          <!-- Check-in complete -->
+          <div class="notif-card">
+            <div class="notif-card-head">
+              <div>
+                <div class="notif-card-name">Check-in Complete</div>
+                <div class="notif-card-desc">Sent after check-in tasks finish</div>
+              </div>
+              <label class="toggle">
+                <input type="checkbox" id="notif_checkin_enabled" onchange="updateNotifCard('checkin',this.checked)">
+                <span class="toggle-track"></span>
+              </label>
+            </div>
+            <div class="notif-fields" id="notif-fields-checkin">
+              <div class="field">
+                <label for="notif_checkin_title">Title</label>
+                <input type="text" id="notif_checkin_title" />
+              </div>
+              <div class="field">
+                <label for="notif_checkin_message">Message</label>
+                <textarea id="notif_checkin_message" rows="2" class="notif-textarea"></textarea>
+                <div class="var-chips">
+                  <span class="var-chip" onclick="insertVar('notif_checkin_message','{guest}')">{guest}</span>
+                  <span class="var-chip" onclick="insertVar('notif_checkin_message','{code}')">{code}</span>
+                  <span class="var-chip" onclick="insertVar('notif_checkin_message','{slot}')">{slot}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Checkout → vacant -->
+          <div class="notif-card">
+            <div class="notif-card-head">
+              <div>
+                <div class="notif-card-name">Check-out — Property Vacant</div>
+                <div class="notif-card-desc">Sent when guest leaves with no back-to-back booking</div>
+              </div>
+              <label class="toggle">
+                <input type="checkbox" id="notif_checkout_vacant_enabled" onchange="updateNotifCard('checkout_vacant',this.checked)">
+                <span class="toggle-track"></span>
+              </label>
+            </div>
+            <div class="notif-fields" id="notif-fields-checkout_vacant">
+              <div class="field">
+                <label for="notif_checkout_vacant_title">Title</label>
+                <input type="text" id="notif_checkout_vacant_title" />
+              </div>
+              <div class="field">
+                <label for="notif_checkout_vacant_message">Message</label>
+                <textarea id="notif_checkout_vacant_message" rows="2" class="notif-textarea"></textarea>
+                <div class="var-chips">
+                  <span class="var-chip" onclick="insertVar('notif_checkout_vacant_message','{guest}')">{guest}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Checkout → cleaner -->
+          <div class="notif-card">
+            <div class="notif-card-head">
+              <div>
+                <div class="notif-card-name">Check-out — Cleaner Mode</div>
+                <div class="notif-card-desc">Sent when guest leaves and a back-to-back booking follows</div>
+              </div>
+              <label class="toggle">
+                <input type="checkbox" id="notif_checkout_cleaner_enabled" onchange="updateNotifCard('checkout_cleaner',this.checked)">
+                <span class="toggle-track"></span>
+              </label>
+            </div>
+            <div class="notif-fields" id="notif-fields-checkout_cleaner">
+              <div class="field">
+                <label for="notif_checkout_cleaner_title">Title</label>
+                <input type="text" id="notif_checkout_cleaner_title" />
+              </div>
+              <div class="field">
+                <label for="notif_checkout_cleaner_message">Message</label>
+                <textarea id="notif_checkout_cleaner_message" rows="2" class="notif-textarea"></textarea>
+                <div class="var-chips">
+                  <span class="var-chip" onclick="insertVar('notif_checkout_cleaner_message','{guest}')">{guest}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Guest arrived -->
+          <div class="notif-card">
+            <div class="notif-card-head">
+              <div>
+                <div class="notif-card-name">Guest Arrived</div>
+                <div class="notif-card-desc">Fires the first time the guest uses their keypad code</div>
+              </div>
+              <label class="toggle">
+                <input type="checkbox" id="notif_guest_arrived_enabled" onchange="updateNotifCard('guest_arrived',this.checked)">
+                <span class="toggle-track"></span>
+              </label>
+            </div>
+            <div class="notif-fields" id="notif-fields-guest_arrived">
+              <div class="field">
+                <label for="notif_guest_arrived_title">Title</label>
+                <input type="text" id="notif_guest_arrived_title" />
+              </div>
+              <div class="field">
+                <label for="notif_guest_arrived_message">Message</label>
+                <textarea id="notif_guest_arrived_message" rows="2" class="notif-textarea"></textarea>
+                <div class="var-chips">
+                  <span class="var-chip" onclick="insertVar('notif_guest_arrived_message','{guest}')">{guest}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Cleaner arrived -->
+          <div class="notif-card">
+            <div class="notif-card-head">
+              <div>
+                <div class="notif-card-name">Cleaner Arrived</div>
+                <div class="notif-card-desc">Fires when the cleaner uses their keypad code</div>
+              </div>
+              <label class="toggle">
+                <input type="checkbox" id="notif_cleaner_arrived_enabled" onchange="updateNotifCard('cleaner_arrived',this.checked)">
+                <span class="toggle-track"></span>
+              </label>
+            </div>
+            <div class="notif-fields" id="notif-fields-cleaner_arrived">
+              <div class="field">
+                <label for="notif_cleaner_arrived_title">Title</label>
+                <input type="text" id="notif_cleaner_arrived_title" />
+              </div>
+              <div class="field">
+                <label for="notif_cleaner_arrived_message">Message</label>
+                <textarea id="notif_cleaner_arrived_message" rows="2" class="notif-textarea"></textarea>
+              </div>
+            </div>
+          </div>
+
+          <!-- Cleaner left -->
+          <div class="notif-card">
+            <div class="notif-card-head">
+              <div>
+                <div class="notif-card-name">Cleaner Left</div>
+                <div class="notif-card-desc">Fires when the cleaner locks up and leaves</div>
+              </div>
+              <label class="toggle">
+                <input type="checkbox" id="notif_cleaner_left_enabled" onchange="updateNotifCard('cleaner_left',this.checked)">
+                <span class="toggle-track"></span>
+              </label>
+            </div>
+            <div class="notif-fields" id="notif-fields-cleaner_left">
+              <div class="field">
+                <label for="notif_cleaner_left_title">Title</label>
+                <input type="text" id="notif_cleaner_left_title" />
+              </div>
+              <div class="field">
+                <label for="notif_cleaner_left_message">Message</label>
+                <textarea id="notif_cleaner_left_message" rows="2" class="notif-textarea"></textarea>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
     </form>
 
     <!-- Fixed save bar -->

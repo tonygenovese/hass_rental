@@ -266,17 +266,21 @@ async function loadActions(append = false) {
     return;
   }
 
-  const html = data.actions.map(a => `
-    <div class="action-card">
+  const html = data.actions.map(a => {
+    const guestLine = a.next_guest
+      ? `${esc(a.guest)} <span class="action-guest-arrow">→</span> <span class="action-next-guest">${esc(a.next_guest)}</span>`
+      : esc(a.guest);
+    return `<div class="action-card">
       <div class="action-card-header">
         <div class="action-type-badge type-${a.type}">${actionTypeLabel(a.type)}</div>
         <div class="action-time">${formatDateTime(a.scheduled_at)}</div>
       </div>
-      <div class="action-guest">${esc(a.guest)}</div>
+      <div class="action-guest">${guestLine}</div>
       <ul class="action-steps">
         ${a.steps.map(s => `<li class="action-step"><span class="step-icon">${s.icon}</span>${esc(s.text)}</li>`).join("")}
       </ul>
-    </div>`).join("");
+    </div>`;
+  }).join("");
 
   if (append) {
     el.insertAdjacentHTML("beforeend", html);
@@ -291,7 +295,7 @@ async function loadActions(append = false) {
 function loadMoreActions() { loadActions(true); }
 
 function actionTypeLabel(type) {
-  return { checkin: "Check-in", checkout: "Check-out", cleaner_start: "Cleaner" }[type] || type;
+  return { checkin: "Check-in", checkout: "Check-out", cleaner_start: "Checkout → Cleaner" }[type] || type;
 }
 
 // ── Inline time editing ────────────────────────────────────────────────────
@@ -575,6 +579,20 @@ async function loadSettings() {
   renderThermostatList(thermoIds, climateEntities);
 
   populateSelect("water_valve_entity_id", valveEntities, cfg.water_valve_entity_id || "", "None / not configured");
+
+  // Notifications
+  const notifs = cfg.notifications || {};
+  const notifKeys = ["checkin", "checkout_vacant", "checkout_cleaner", "guest_arrived", "cleaner_arrived", "cleaner_left"];
+  notifKeys.forEach(key => {
+    const n = notifs[key] || {};
+    const enabledEl = document.getElementById(`notif_${key}_enabled`);
+    const titleEl   = document.getElementById(`notif_${key}_title`);
+    const msgEl     = document.getElementById(`notif_${key}_message`);
+    if (enabledEl) enabledEl.checked = n.enabled !== false;
+    if (titleEl)   titleEl.value     = n.title   || "";
+    if (msgEl)     msgEl.value       = n.message || "";
+    updateNotifCard(key, n.enabled !== false);
+  });
 }
 
 function renderThermostatList(selected, entities) {
@@ -701,6 +719,16 @@ async function saveSettings(e) {
   data.checkout_automation_ids     = [...document.querySelectorAll("#checkout_automations select")].map(s => s.value).filter(Boolean);
   data.pre_checkin_automation_ids  = [...document.querySelectorAll("#precheckin_automations select")].map(s => s.value).filter(Boolean);
 
+  const notifKeys = ["checkin", "checkout_vacant", "checkout_cleaner", "guest_arrived", "cleaner_arrived", "cleaner_left"];
+  data.notifications = {};
+  notifKeys.forEach(key => {
+    data.notifications[key] = {
+      enabled: document.getElementById(`notif_${key}_enabled`)?.checked ?? true,
+      title:   document.getElementById(`notif_${key}_title`)?.value   || "",
+      message: document.getElementById(`notif_${key}_message`)?.value || "",
+    };
+  });
+
   const resp = await fetch("api/settings", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -732,6 +760,22 @@ async function reloadAddonStore() {
     btn.textContent = "✗ Request failed";
   }
   setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 5000);
+}
+
+// ── Notification settings helpers ─────────────────────────────────────────
+function updateNotifCard(key, enabled) {
+  const el = document.getElementById(`notif-fields-${key}`);
+  if (el) el.classList.toggle("dimmed", !enabled);
+}
+
+function insertVar(targetId, variable) {
+  const el = document.getElementById(targetId);
+  if (!el) return;
+  const start = el.selectionStart ?? el.value.length;
+  const end   = el.selectionEnd   ?? el.value.length;
+  el.value = el.value.slice(0, start) + variable + el.value.slice(end);
+  el.selectionStart = el.selectionEnd = start + variable.length;
+  el.focus();
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
