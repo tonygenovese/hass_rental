@@ -567,3 +567,61 @@ ul, ol { list-style: none; }
 /* ── Spinner ───────────────────────────────────────────────────────────── */
 @keyframes spin { to { transform: rotate(360deg); } }
 .spinning { animation: spin .7s linear infinite; display: inline-block; }
+
+/* ── Device controls ───────────────────────────────────────────────────── */
+.device-controls {
+  display: flex; gap: 8px;
+  margin-top: 12px; padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.device-ctrl-btn {
+  flex: 1; padding: 9px 12px; border-radius: var(--r-sm);
+  font-size: 13px; font-weight: 600; text-align: center;
+  background: var(--s2); color: var(--t1); border: 1px solid var(--border);
+  transition: background .15s, border-color .15s;
+}
+.device-ctrl-btn:hover:not(:disabled) { background: var(--s3); border-color: var(--border2); }
+.device-ctrl-btn.ctrl-primary {
+  background: var(--blue); color: #fff; border-color: transparent;
+  box-shadow: 0 1px 3px rgba(0,122,255,.2);
+}
+.device-ctrl-btn.ctrl-primary:hover:not(:disabled) { opacity: .88; }
+.device-ctrl-btn.ctrl-danger {
+  background: rgba(255,59,48,.06); color: var(--red);
+  border-color: rgba(255,59,48,.2);
+}
+.device-ctrl-btn.ctrl-danger:hover:not(:disabled) { background: rgba(255,59,48,.12); }
+.device-ctrl-btn:disabled { opacity: .4; cursor: not-allowed; }
+
+/* ── Thermostat layout ─────────────────────────────────────────────────── */
+.thermo-layout {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 0 12px; border-bottom: 1px solid var(--border);
+  margin-bottom: 10px;
+}
+.thermo-current { font-size: 26px; font-weight: 600; color: var(--t1); }
+.thermo-stepper { display: flex; align-items: center; gap: 14px; }
+.stepper-btn {
+  width: 38px; height: 38px; border-radius: 50%;
+  background: var(--s2); border: 1px solid var(--border);
+  font-size: 22px; font-weight: 300; color: var(--t1); line-height: 1;
+  display: flex; align-items: center; justify-content: center;
+  transition: background .15s;
+}
+.stepper-btn:hover { background: var(--s3); }
+.stepper-val {
+  font-size: 22px; font-weight: 700; color: var(--t1);
+  min-width: 72px; text-align: center;
+}
+.mode-pills { display: flex; gap: 6px; flex-wrap: wrap; }
+.mode-pill {
+  padding: 5px 13px; border-radius: 20px;
+  font-size: 12px; font-weight: 500; text-transform: capitalize;
+  background: var(--s2); color: var(--t2); border: 1px solid var(--border);
+  transition: all .15s;
+}
+.mode-pill:hover { background: var(--s3); color: var(--t1); }
+.mode-pill.mode-pill-active { background: var(--t1); color: #fff; border-color: var(--t1); }
+.state-heating { background: rgba(255,149,0,.1); color: #B06000; border: 1px solid rgba(255,149,0,.25); }
+.state-cooling { background: var(--blue-bg); color: #0055CC; border: 1px solid rgba(0,122,255,.2); }
+.state-idle    { background: var(--s2); color: var(--t3); border: 1px solid var(--border); }

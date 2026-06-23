@@ -8,6 +8,10 @@ let logCurrentFilter = "all";
 let logTotal = 0;
 let actionsOffset = 0;
 const ACTIONS_LIMIT = 5;
+let _lockData = [];
+let _thermoData = [];
+let _valveData = null;
+const _tempDebounce = {};
 
 const LOG_ICONS = {
   checkin: "🏠", checkout: "🚪", first_entry: "🔑", cleaner_entry: "🧹",
@@ -335,17 +339,18 @@ async function loadDevices() {
 
   const data = await fetch("api/device-status").then(r => r.json());
   const mc = data.managed_codes || {};
+  _lockData  = data.locks || [];
+  _thermoData = data.thermostats || [];
+  _valveData  = data.water_valve || null;
 
-  // Locks
+  // ── Locks ──
   const locksEl = document.getElementById("devices-locks");
-  if (data.locks && data.locks.length > 0) {
-    locksEl.innerHTML = data.locks.map(lock => {
+  if (_lockData.length > 0) {
+    locksEl.innerHTML = _lockData.map((lock, li) => {
       const st = (lock.state || "").toLowerCase();
       const stateClass = st === "locked" ? "state-locked" : st === "unlocked" ? "state-unlocked" : "state-unknown";
       const stateLabel = lock.state ? lock.state.charAt(0).toUpperCase() + lock.state.slice(1) : "Unknown";
 
-      // Always show slots 1 through at least max(5, highest managed slot),
-      // plus any higher slots that have codes
       const highManaged = Math.max(mc.guest_slot || 0, mc.cleaner_slot || 0, 5);
       const slotsToShow = new Set();
       for (let i = 1; i <= highManaged; i++) slotsToShow.add(i);
@@ -356,91 +361,159 @@ async function loadDevices() {
         const isGuest   = mc.guest_slot   === i;
         const isCleaner = mc.cleaner_slot === i;
         const managed   = isGuest || isCleaner;
-
         let code = lock.code_slots?.[String(i)] || "——";
         if (isGuest && mc.active_guest_code)   code = mc.active_guest_code;
         else if (isCleaner && mc.cleaner_code) code = mc.cleaner_code;
-
-        const tag = isGuest
-          ? `<span class="slot-tag tag-guest">Guest</span>`
-          : isCleaner
-          ? `<span class="slot-tag tag-cleaner">Cleaner</span>`
-          : `<span class="slot-tag tag-empty">—</span>`;
-
-        return `
-          <div class="slot-row${managed ? " slot-managed" : ""}">
-            <div class="slot-num">Slot ${i}</div>
-            <div class="slot-code">${esc(code)}</div>
-            ${tag}
-          </div>`;
+        const tag = isGuest   ? `<span class="slot-tag tag-guest">Guest</span>`
+                  : isCleaner ? `<span class="slot-tag tag-cleaner">Cleaner</span>`
+                              : `<span class="slot-tag tag-empty">—</span>`;
+        return `<div class="slot-row${managed ? " slot-managed" : ""}">
+          <div class="slot-num">Slot ${i}</div>
+          <div class="slot-code">${esc(code)}</div>
+          ${tag}
+        </div>`;
       }).join("");
 
-      return `
-        <div class="device-card">
-          <div class="device-card-head">
-            <div class="device-name">${esc(lock.name)}</div>
-            <div class="device-state-badge ${stateClass}">${stateLabel}</div>
-          </div>
-          ${lock.battery_level != null ? `<div class="device-battery">🔋 Battery: ${lock.battery_level}%</div>` : ""}
-          <div class="slot-list">${slotsHtml}</div>
-        </div>`;
+      return `<div class="device-card">
+        <div class="device-card-head">
+          <div class="device-name">${esc(lock.name)}</div>
+          <div class="device-state-badge ${stateClass}">${stateLabel}</div>
+        </div>
+        ${lock.battery_level != null ? `<div class="device-battery">🔋 Battery: ${lock.battery_level}%</div>` : ""}
+        <div class="slot-list">${slotsHtml}</div>
+        <div class="device-controls">
+          <button class="device-ctrl-btn" onclick="controlLock(${li},'unlock')">Unlock</button>
+          <button class="device-ctrl-btn ctrl-primary" onclick="controlLock(${li},'lock')">Lock</button>
+        </div>
+      </div>`;
     }).join("");
   } else {
     locksEl.innerHTML = '<div class="empty">No locks configured.<br>Add lock entities in Settings.</div>';
   }
 
-  // Thermostats
+  // ── Thermostats ──
   const thermoSection = document.getElementById("devices-thermostat-section");
   const thermoEl      = document.getElementById("devices-thermostat");
-  if (data.thermostats && data.thermostats.length > 0) {
-    thermoEl.innerHTML = data.thermostats.map(t => `
-      <div class="device-card">
+  if (_thermoData.length > 0) {
+    const modeLabel = m => m.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+    const actionClass = a => ({ heating: "state-heating", cooling: "state-cooling", idle: "state-idle", off: "state-unknown" })[a?.toLowerCase()] || "state-unknown";
+
+    thermoEl.innerHTML = _thermoData.map((t, ti) => {
+      const modes = (t.hvac_modes?.length ? t.hvac_modes : ["heat", "cool", "auto", "off"]);
+      const target = t.target_temperature ?? "";
+      const step   = t.temp_step || 1;
+      const modesHtml = modes.map(m =>
+        `<button class="mode-pill${t.state === m ? " mode-pill-active" : ""}" data-thermo-idx="${ti}" data-mode="${m}" onclick="setHvacMode(${ti},'${m}')">${modeLabel(m)}</button>`
+      ).join("");
+
+      return `<div class="device-card">
         <div class="device-card-head">
           <div class="device-name">${esc(t.name)}</div>
-          <div class="device-state-badge state-unknown">${esc(t.state || "—")}</div>
+          <div class="device-state-badge ${actionClass(t.hvac_action)}">${esc(t.hvac_action || t.state || "—")}</div>
         </div>
-        <div class="thermo-grid">
-          <div class="thermo-cell">
+        <div class="thermo-layout">
+          <div>
             <div class="micro-label">Current</div>
-            <div class="thermo-val">${t.current_temperature != null ? t.current_temperature + esc(t.unit) : "—"}</div>
+            <div class="thermo-current">${t.current_temperature != null ? t.current_temperature + esc(t.unit) : "—"}</div>
           </div>
-          <div class="thermo-cell">
-            <div class="micro-label">Set To</div>
-            <div class="thermo-val">${t.target_temperature != null ? t.target_temperature + esc(t.unit) : "—"}</div>
-          </div>
-          <div class="thermo-cell">
-            <div class="micro-label">Action</div>
-            <div class="thermo-val">${esc(t.hvac_action || t.state || "—")}</div>
+          <div class="thermo-stepper">
+            <button class="stepper-btn" onclick="adjustTemp(${ti},${-step})">−</button>
+            <span class="stepper-val" id="thermo-target-${ti}" data-temp="${target}">${target !== "" ? target + esc(t.unit) : "—"}</span>
+            <button class="stepper-btn" onclick="adjustTemp(${ti},${step})">+</button>
           </div>
         </div>
-      </div>`).join("");
+        <div class="mode-pills">${modesHtml}</div>
+      </div>`;
+    }).join("");
     thermoSection.classList.remove("hidden");
   } else {
     thermoSection.classList.add("hidden");
   }
 
-  // Water valve
+  // ── Water valve ──
   const valveSection = document.getElementById("devices-valve-section");
   const valveEl      = document.getElementById("devices-valve");
-  if (data.water_valve) {
-    const v = data.water_valve;
+  if (_valveData) {
+    const v = _valveData;
     const vs = (v.state || "").toLowerCase();
     const stateClass = (vs === "open" || vs === "on") ? "state-open"
-                     : (vs === "closed" || vs === "off") ? "state-closed"
-                     : "state-unknown";
+                     : (vs === "closed" || vs === "off") ? "state-closed" : "state-unknown";
     const stateLabel = vs === "on" ? "Open" : vs === "off" ? "Closed"
                      : v.state ? v.state.charAt(0).toUpperCase() + v.state.slice(1) : "Unknown";
-    valveEl.innerHTML = `
-      <div class="device-card">
-        <div class="device-card-head">
-          <div class="device-name">${esc(v.name)}</div>
-          <div class="device-state-badge ${stateClass}">${stateLabel}</div>
-        </div>
-      </div>`;
+    const isOpen = vs === "open" || vs === "on";
+    valveEl.innerHTML = `<div class="device-card">
+      <div class="device-card-head">
+        <div class="device-name">${esc(v.name)}</div>
+        <div class="device-state-badge ${stateClass}">${stateLabel}</div>
+      </div>
+      <div class="device-controls">
+        ${isOpen
+          ? `<button class="device-ctrl-btn ctrl-danger" onclick="controlValve('close')">Close Valve</button>`
+          : `<button class="device-ctrl-btn ctrl-primary" onclick="controlValve('open')">Open Valve</button>`
+        }
+      </div>
+    </div>`;
     valveSection.classList.remove("hidden");
   } else {
     valveSection.classList.add("hidden");
   }
+}
+
+// ── Device controls ─────────────────────────────────────────────────────────
+async function controlLock(idx, action) {
+  const lock = _lockData[idx];
+  if (!lock) return;
+  const btn = event.currentTarget;
+  const orig = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = action === "lock" ? "Locking…" : "Unlocking…";
+  await fetch("api/device/lock", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ entity_id: lock.entity_id, action }),
+  });
+  setTimeout(loadDevices, 1500);
+}
+
+async function adjustTemp(idx, delta) {
+  const t = _thermoData[idx];
+  if (!t) return;
+  const el = document.getElementById(`thermo-target-${idx}`);
+  const cur = parseFloat(el?.dataset.temp || t.target_temperature || 70);
+  const min = t.min_temp ?? 40;
+  const max = t.max_temp ?? 95;
+  const newTemp = Math.min(max, Math.max(min, Math.round((cur + delta) * 10) / 10));
+  if (el) { el.dataset.temp = newTemp; el.textContent = newTemp + (t.unit || "°F"); }
+  clearTimeout(_tempDebounce[idx]);
+  _tempDebounce[idx] = setTimeout(async () => {
+    await fetch("api/device/thermostat", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ entity_id: t.entity_id, temperature: newTemp }),
+    });
+  }, 600);
+}
+
+async function setHvacMode(idx, mode) {
+  const t = _thermoData[idx];
+  if (!t) return;
+  document.querySelectorAll(`.mode-pill[data-thermo-idx="${idx}"]`).forEach(btn => {
+    btn.classList.toggle("mode-pill-active", btn.dataset.mode === mode);
+  });
+  await fetch("api/device/thermostat", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ entity_id: t.entity_id, hvac_mode: mode }),
+  });
+}
+
+async function controlValve(action) {
+  if (!_valveData) return;
+  const btn = event.currentTarget;
+  btn.disabled = true;
+  btn.textContent = action === "open" ? "Opening…" : "Closing…";
+  await fetch("api/device/valve", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ entity_id: _valveData.entity_id, action }),
+  });
+  setTimeout(loadDevices, 1500);
 }
 
 // ── Settings ───────────────────────────────────────────────────────────────

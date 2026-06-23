@@ -168,6 +168,10 @@ async def api_device_status():
             "target_temperature":  attrs.get("temperature"),
             "hvac_action":         attrs.get("hvac_action"),
             "unit":                attrs.get("temperature_unit", "°F"),
+            "hvac_modes":          attrs.get("hvac_modes", []),
+            "min_temp":            attrs.get("min_temp"),
+            "max_temp":            attrs.get("max_temp"),
+            "temp_step":           attrs.get("target_temp_step", 1),
         })
 
     water_valve = None
@@ -187,6 +191,51 @@ async def api_device_status():
         "water_valve":   water_valve,
         "managed_codes": scheduler.get_managed_codes(),
     }
+
+
+@app.post("/api/device/lock")
+async def api_device_lock(body: dict):
+    entity_id = body.get("entity_id", "").strip()
+    action = body.get("action", "")
+    if not entity_id or action not in ("lock", "unlock"):
+        return JSONResponse({"ok": False, "error": "invalid params"}, status_code=400)
+    await ha_client.call_service("lock", action, {"entity_id": entity_id})
+    activity_log.add("info", f"Lock manually {action}ed: {entity_id}")
+    return {"ok": True}
+
+
+@app.post("/api/device/thermostat")
+async def api_device_thermostat(body: dict):
+    entity_id = body.get("entity_id", "").strip()
+    temperature = body.get("temperature")
+    hvac_mode = body.get("hvac_mode", "").strip()
+    if not entity_id:
+        return JSONResponse({"ok": False, "error": "entity_id required"}, status_code=400)
+    if temperature is not None:
+        await ha_client.call_service("climate", "set_temperature", {
+            "entity_id": entity_id, "temperature": float(temperature)
+        })
+        activity_log.add("thermostat", f"Thermostat {entity_id} set to {temperature}° manually")
+    if hvac_mode:
+        await ha_client.call_service("climate", "set_hvac_mode", {
+            "entity_id": entity_id, "hvac_mode": hvac_mode
+        })
+        activity_log.add("thermostat", f"Thermostat {entity_id} mode set to {hvac_mode}")
+    return {"ok": True}
+
+
+@app.post("/api/device/valve")
+async def api_device_valve(body: dict):
+    entity_id = body.get("entity_id", "").strip()
+    action = body.get("action", "")
+    if not entity_id or action not in ("open", "close"):
+        return JSONResponse({"ok": False, "error": "invalid params"}, status_code=400)
+    domain = entity_id.split(".")[0]
+    svc = ("open_valve" if action == "open" else "close_valve") if domain == "valve" \
+          else ("turn_on" if action == "open" else "turn_off")
+    await ha_client.call_service(domain, svc, {"entity_id": entity_id})
+    activity_log.add("info", f"Water valve {action}ed manually: {entity_id}")
+    return {"ok": True}
 
 
 @app.post("/api/refresh")
