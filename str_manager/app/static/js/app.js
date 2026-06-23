@@ -354,22 +354,38 @@ async function loadDevices() {
       const highManaged = Math.max(mc.guest_slot || 0, mc.cleaner_slot || 0, 5);
       const slotsToShow = new Set();
       for (let i = 1; i <= highManaged; i++) slotsToShow.add(i);
-      Object.keys(lock.code_slots || {}).forEach(k => slotsToShow.add(Number(k)));
+      // Add any slot where Z-Wave reports occupied or a code (regardless of position)
+      Object.entries(lock.code_slots || {}).forEach(([k, v]) => {
+        if (v.occupied || v.code) slotsToShow.add(Number(k));
+      });
       const sortedSlots = [...slotsToShow].sort((a, b) => a - b);
 
       const slotsHtml = sortedSlots.map(i => {
         const isGuest   = mc.guest_slot   === i;
         const isCleaner = mc.cleaner_slot === i;
         const managed   = isGuest || isCleaner;
-        let code = lock.code_slots?.[String(i)] || "——";
-        if (isGuest && mc.active_guest_code)   code = mc.active_guest_code;
-        else if (isCleaner && mc.cleaner_code) code = mc.cleaner_code;
+        const slotData  = lock.code_slots?.[String(i)];
+
+        let code, occupied;
+        if (isGuest && mc.active_guest_code) {
+          code = mc.active_guest_code; occupied = true;
+        } else if (isCleaner && mc.cleaner_code) {
+          code = mc.cleaner_code; occupied = true;
+        } else if (slotData?.code) {
+          code = slotData.code; occupied = true;
+        } else if (slotData?.occupied) {
+          code = "• • • •"; occupied = true;  // slot has a PIN but it's not in the Z-Wave JS cache
+        } else {
+          code = "—"; occupied = false;
+        }
+
         const tag = isGuest   ? `<span class="slot-tag tag-guest">Guest</span>`
                   : isCleaner ? `<span class="slot-tag tag-cleaner">Cleaner</span>`
-                              : `<span class="slot-tag tag-empty">—</span>`;
+                  : occupied  ? `<span class="slot-tag tag-occupied">In use</span>`
+                              : `<span class="slot-tag tag-empty">Empty</span>`;
         return `<div class="slot-row${managed ? " slot-managed" : ""}">
           <div class="slot-num">Slot ${i}</div>
-          <div class="slot-code">${esc(code)}</div>
+          <div class="slot-code${occupied ? "" : " slot-code-empty"}">${esc(code)}</div>
           ${tag}
         </div>`;
       }).join("");
@@ -518,12 +534,13 @@ async function controlValve(action) {
 
 // ── Settings ───────────────────────────────────────────────────────────────
 async function loadSettings() {
-  const [cfg, lockEntities, automationEntities, notifyServices, climateEntities] = await Promise.all([
+  const [cfg, lockEntities, automationEntities, notifyServices, climateEntities, valveEntities] = await Promise.all([
     fetch("api/settings").then(r => r.json()),
     fetch("api/ha/entities?domain=lock").then(r => r.json()),
     fetch("api/ha/entities?domain=automation").then(r => r.json()),
     fetch("api/ha/notify-services").then(r => r.json()),
     fetch("api/ha/entities?domain=climate").then(r => r.json()),
+    fetch("api/ha/entities?domain=valve,switch").then(r => r.json()),
   ]);
 
   allAutomations = automationEntities;
@@ -557,8 +574,7 @@ async function loadSettings() {
     : (cfg.thermostat_entity_id ? [cfg.thermostat_entity_id] : []);
   renderThermostatList(thermoIds, climateEntities);
 
-  const valveEl = document.getElementById("water_valve_entity_id");
-  if (valveEl) valveEl.value = cfg.water_valve_entity_id || "";
+  populateSelect("water_valve_entity_id", valveEntities, cfg.water_valve_entity_id || "", "None / not configured");
 }
 
 function renderThermostatList(selected, entities) {
@@ -629,7 +645,10 @@ function maybeShowAutoHint(fieldId, entities, selectedValue, savedValue) {
 function populateSelect(id, entities, currentValue, placeholder) {
   const sel = document.getElementById(id);
   if (!sel) return;
-  sel.innerHTML = `<option value="">${placeholder}</option>` +
+  const ids = new Set(entities.map(e => e.entity_id));
+  const orphan = currentValue && !ids.has(currentValue)
+    ? `<option value="${esc(currentValue)}" selected>${esc(currentValue)} (saved)</option>` : "";
+  sel.innerHTML = `<option value="">${placeholder}</option>` + orphan +
     entities.map(e => `<option value="${e.entity_id}"${e.entity_id === currentValue ? " selected" : ""}>${esc(e.name || e.entity_id)}</option>`).join("");
 }
 
@@ -667,7 +686,8 @@ async function saveSettings(e) {
   const statusEl = document.getElementById("save-status");
 
   const data = {};
-  ["ical_url", "cleaner_code", "property_timezone", "water_valve_entity_id"].forEach(f => { const el = document.getElementById(f); if (el) data[f] = el.value.trim(); });
+  ["ical_url", "cleaner_code", "property_timezone"].forEach(f => { const el = document.getElementById(f); if (el) data[f] = el.value.trim(); });
+  data.water_valve_entity_id = document.getElementById("water_valve_entity_id")?.value || "";
   ["poll_interval_minutes", "guest_code_slot", "cleaner_code_slot"].forEach(f =>
     data[f] = parseInt(document.getElementById(f).value, 10)
   );

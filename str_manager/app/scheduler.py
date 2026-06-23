@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import random
 from datetime import datetime, timedelta, timezone
@@ -11,6 +12,29 @@ from .ical_parser import Reservation, fetch_reservations
 from .state_machine import RentalState, determine_state
 
 logger = logging.getLogger(__name__)
+
+_STATE_PATH = "/data/state.json"
+
+
+def _save_state() -> None:
+    try:
+        with open(_STATE_PATH, "w") as f:
+            json.dump({"active_guest_code": _active_guest_code}, f)
+    except Exception as exc:
+        logger.error("Failed to save runtime state: %s", exc)
+
+
+def _load_state() -> None:
+    global _active_guest_code
+    try:
+        with open(_STATE_PATH) as f:
+            data = json.load(f)
+            _active_guest_code = data.get("active_guest_code", "")
+    except FileNotFoundError:
+        pass
+    except Exception as exc:
+        logger.error("Failed to load runtime state: %s", exc)
+
 
 _scheduler = AsyncIOScheduler()
 _state: RentalState = RentalState.VACANT
@@ -104,6 +128,7 @@ async def _handle_transition(old: RentalState, new: RentalState, reservation: Re
         else:
             _active_guest_code = str(random.randint(1000, 9999))
 
+        _save_state()
         if lock_ids:
             if not dry:
                 for lid in lock_ids:
@@ -158,6 +183,7 @@ async def _handle_transition(old: RentalState, new: RentalState, reservation: Re
             activity_log.add("checkout", f"{pfx}{co_msg}", guest_name)
 
         _active_guest_code = ""
+        _save_state()
         if not dry:
             await automations.trigger(cfg.get("checkout_automation_ids", []))
         elif cfg.get("checkout_automation_ids"):
@@ -344,6 +370,7 @@ def get_managed_codes() -> dict:
 
 
 def start(poll_interval_minutes: int = 30) -> None:
+    _load_state()
     _scheduler.add_job(poll, "interval", minutes=poll_interval_minutes, id="ical_poll", replace_existing=True)
     if not _scheduler.running:
         _scheduler.start()

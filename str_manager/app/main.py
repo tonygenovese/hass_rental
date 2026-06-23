@@ -132,18 +132,25 @@ async def api_device_status():
         attrs = state.get("attributes", {})
         node_id = attrs.get("node_id")
 
-        # Start with any codes already exposed as entity attributes
-        code_slots: dict[str, str] = {}
+        # Start with any codes exposed as entity attributes (some integrations do this)
+        code_slots: dict[str, dict] = {}
         for slot in range(1, 11):
             key = f"code_slot_{slot}"
             if key in attrs:
-                code_slots[str(slot)] = attrs[key]
+                val = attrs[key]
+                code_slots[str(slot)] = {"code": str(val) if val else None, "occupied": bool(val)}
 
-        # Supplement via Z-Wave JS WS API (reads the node's value cache)
+        # Supplement via Z-Wave JS WS API (reads userIdStatus + userCode from cache)
         if node_id is not None:
-            zwave_codes = await ha_client.get_lock_usercodes(lid, node_id, max_slots=10)
-            for k, v in zwave_codes.items():
-                code_slots.setdefault(k, v)
+            zwave_data = await ha_client.get_lock_usercodes(lid, node_id, max_slots=30)
+            for slot_str, slot_data in zwave_data.items():
+                if slot_str not in code_slots:
+                    code_slots[slot_str] = slot_data
+                else:
+                    if slot_data.get("occupied"):
+                        code_slots[slot_str]["occupied"] = True
+                    if slot_data.get("code"):
+                        code_slots[slot_str]["code"] = slot_data["code"]
 
         locks.append({
             "entity_id":     lid,

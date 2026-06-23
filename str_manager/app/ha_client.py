@@ -43,7 +43,9 @@ async def get_states(domain: str | None = None) -> list[dict[str, Any]]:
     if not isinstance(states, list):
         return []
     if domain:
-        states = [s for s in states if s["entity_id"].startswith(f"{domain}.")]
+        # supports comma-separated e.g. "valve,switch"
+        domains = [d.strip() for d in domain.split(",") if d.strip()]
+        states = [s for s in states if any(s["entity_id"].startswith(f"{d}.") for d in domains)]
     return states
 
 
@@ -71,25 +73,30 @@ async def get_state(entity_id: str) -> dict[str, Any] | None:
             return await resp.json()
 
 
-async def get_lock_usercodes(entity_id: str, node_id: int, max_slots: int = 10) -> dict[str, str]:
+async def get_lock_usercodes(entity_id: str, node_id: int, max_slots: int = 30) -> dict[str, dict]:
     """
-    Query Z-Wave JS usercode values for slots 1‥max_slots.
-    Returns {slot_str: code_str} for every non-empty slot.
-    Uses a short-lived WS connection so as not to disturb the event listener.
+    Query Z-Wave JS for user codes (CC99) for slots 1..max_slots.
+    Reads both userIdStatus and userCode so we know which slots are occupied
+    even when the actual PIN is not in Z-Wave JS's value cache.
+
+    Returns {slot_str: {"code": str|None, "occupied": bool}}
+      occupied=True  → slot has a PIN (code may be None if cache is stale)
+      occupied=False → slot is empty
+    Slots with no response at all are omitted from the result.
+
+    userIdStatus values: 0=available, 1=enabled(PIN), 2=messaging, 3=passage-mode
     """
     import websockets
 
-    results: dict[str, str] = {}
+    results: dict[str, dict] = {}
     try:
         async with websockets.connect(WS_URL) as ws:
-            # Auth
             await ws.recv()  # auth_required
             await ws.send(json.dumps({"type": "auth", "access_token": _token()}))
             auth_ok = json.loads(await ws.recv())
             if auth_ok.get("type") != "auth_ok":
                 return results
 
-            # Resolve config_entry_id for the entity
             await ws.send(json.dumps({"id": 1, "type": "config/entity_registry/get", "entity_id": entity_id}))
             reg = json.loads(await ws.recv())
             entry_id = (reg.get("result") or {}).get("config_entry_id")
@@ -97,34 +104,47 @@ async def get_lock_usercodes(entity_id: str, node_id: int, max_slots: int = 10) 
                 logger.warning("get_lock_usercodes: no config_entry_id for %s", entity_id)
                 return results
 
-            # Send all slot queries in one burst
-            slot_for_id: dict[int, int] = {}
+            # Burst-send queries for both properties on every slot
+            id_map: dict[int, tuple[int, str]] = {}  # msg_id -> (slot, property)
+            msg_id = 2
             for slot in range(1, max_slots + 1):
-                mid = slot + 1  # ids start at 2 (1 was used above)
-                slot_for_id[mid] = slot
-                await ws.send(json.dumps({
-                    "id": mid,
-                    "type": "zwave_js/get_value",
-                    "entry_id": entry_id,
-                    "node_id": node_id,
-                    "command_class": 99,   # Access Control / UserCode
-                    "endpoint": 0,
-                    "property": "userCode",
-                    "property_key": slot,
-                }))
+                for prop in ("userIdStatus", "userCode"):
+                    id_map[msg_id] = (slot, prop)
+                    await ws.send(json.dumps({
+                        "id": msg_id, "type": "zwave_js/get_value",
+                        "entry_id": entry_id, "node_id": node_id,
+                        "command_class": 99, "endpoint": 0,
+                        "property": prop, "property_key": slot,
+                    }))
+                    msg_id += 1
 
-            # Collect responses (one per slot, with timeout)
-            for _ in range(max_slots):
+            # Collect responses until deadline — don't bail on first timeout
+            pending = set(id_map.keys())
+            deadline = asyncio.get_event_loop().time() + 8.0
+            while pending:
+                remaining = deadline - asyncio.get_event_loop().time()
+                if remaining <= 0:
+                    break
                 try:
-                    raw = await asyncio.wait_for(ws.recv(), timeout=3.0)
+                    raw = await asyncio.wait_for(ws.recv(), timeout=min(remaining, 2.0))
                     resp = json.loads(raw)
-                    slot = slot_for_id.get(resp.get("id"))
-                    if slot and resp.get("success"):
+                    mid = resp.get("id")
+                    if mid not in id_map:
+                        continue
+                    pending.discard(mid)
+                    slot, prop = id_map[mid]
+                    s = str(slot)
+                    if s not in results:
+                        results[s] = {"code": None, "occupied": False}
+                    if resp.get("success"):
                         val = resp.get("result")
-                        if val and str(val).strip():
-                            results[str(slot)] = str(val).strip()
+                        if prop == "userIdStatus" and val is not None:
+                            results[s]["occupied"] = int(val) != 0
+                        elif prop == "userCode" and val and str(val).strip():
+                            results[s]["code"] = str(val).strip()
                 except asyncio.TimeoutError:
                     break
+
     except Exception as exc:
         logger.error("get_lock_usercodes(%s) failed: %s", entity_id, exc)
     return results

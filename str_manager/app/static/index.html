@@ -329,8 +329,10 @@
           </div>
           <div class="field">
             <label for="water_valve_entity_id">Water Valve Entity</label>
-            <input type="text" id="water_valve_entity_id" placeholder="e.g. valve.main_water" />
-            <div class="field-hint">Any HA entity that controls your water shutoff (valve.*, switch.*, etc.)</div>
+            <select id="water_valve_entity_id">
+              <option value="">None / not configured</option>
+            </select>
+            <div class="field-hint">Any HA entity controlling your water shutoff (valve.*, switch.*, etc.)</div>
           </div>
         </div>
       </div>
