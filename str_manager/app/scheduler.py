@@ -116,10 +116,11 @@ async def _handle_transition(old: RentalState, new: RentalState, reservation: Re
                     await lock_manager.clear_code(lid, cleaner_slot)
             activity_log.add("code_cleared", f"{pfx}Cleaner code cleared from slot {cleaner_slot}")
 
-        msg = f"Guest checked in. Access code: {_active_guest_code}"
+        slot_info = f"slot {guest_slot}" if lock_ids else "no lock configured"
+        msg = f"Check-in tasks done for {guest_name}. Code {_active_guest_code} set in {slot_info}."
         if not dry:
-            await notifier.send(notify_svc, f"Check-in: {guest_name}", msg, "str_mgr_checkin")
-        activity_log.add("checkin", f"{pfx}{guest_name} checked in. Code: {_active_guest_code}", guest_name)
+            await notifier.send(notify_svc, f"Ready for {guest_name}", msg, "str_mgr_checkin")
+        activity_log.add("checkin", f"{pfx}Check-in tasks complete — {guest_name}. Code {_active_guest_code} set in {slot_info}.", guest_name)
         if not dry:
             await automations.trigger(cfg.get("checkin_automation_ids", []))
         elif cfg.get("checkin_automation_ids"):
@@ -146,13 +147,15 @@ async def _handle_transition(old: RentalState, new: RentalState, reservation: Re
                     for lid in lock_ids:
                         await lock_manager.set_code(lid, cleaner_slot, cleaner_code)
                 activity_log.add("code_set", f"{pfx}Cleaner code set in slot {cleaner_slot}")
+            co_msg = f"Check-out tasks done for {guest_name}. Guest code cleared. Cleaner mode active."
             if not dry:
-                await notifier.send(notify_svc, "Guest Checked Out", "Cleaner mode active.", "str_mgr_checkout")
-            activity_log.add("checkout", f"{pfx}{guest_name} checked out. Cleaner mode active.", guest_name)
+                await notifier.send(notify_svc, "Check-out Complete", co_msg, "str_mgr_checkout")
+            activity_log.add("checkout", f"{pfx}{co_msg}", guest_name)
         else:
+            co_msg = f"Check-out tasks done for {guest_name}. Guest code cleared. Property is vacant."
             if not dry:
-                await notifier.send(notify_svc, "Guest Checked Out", "Property is vacant.", "str_mgr_checkout")
-            activity_log.add("checkout", f"{pfx}{guest_name} checked out. Property vacant.", guest_name)
+                await notifier.send(notify_svc, "Check-out Complete", co_msg, "str_mgr_checkout")
+            activity_log.add("checkout", f"{pfx}{co_msg}", guest_name)
 
         _active_guest_code = ""
         if not dry:
@@ -296,7 +299,7 @@ def get_upcoming_actions(limit: int = 5, offset: int = 0) -> dict:
                     steps.append({"icon": "🔓", "text": f"Clear cleaner code from slot {cleaner_slot}"})
                 steps.append({"icon": "🔐", "text": f"Set guest code in slot {guest_slot} on {lock_label}"})
             if notify_svc:
-                steps.append({"icon": "🔔", "text": "Send check-in notification"})
+                steps.append({"icon": "🔔", "text": "Notify: check-in tasks complete + code"})
             if checkin_autos:
                 steps.append({"icon": "⚡", "text": f"Trigger {len(checkin_autos)} check-in automation(s)"})
             actions.append({
@@ -312,8 +315,8 @@ def get_upcoming_actions(limit: int = 5, offset: int = 0) -> dict:
             if is_cleaner_after and cleaner_code:
                 steps.append({"icon": "🔐", "text": f"Set cleaner code in slot {cleaner_slot}"})
         if notify_svc:
-            lbl = " · cleaner mode" if is_cleaner_after else ""
-            steps.append({"icon": "🔔", "text": f"Send check-out notification{lbl}"})
+            lbl = " (cleaner mode)" if is_cleaner_after else ""
+            steps.append({"icon": "🔔", "text": f"Notify: check-out tasks complete{lbl}"})
         if checkout_autos:
             steps.append({"icon": "⚡", "text": f"Trigger {len(checkout_autos)} check-out automation(s)"})
         if is_cleaner_after and pre_checkin_autos:
