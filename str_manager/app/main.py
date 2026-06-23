@@ -22,7 +22,7 @@ async def _broadcast(msg: dict[str, Any]) -> None:
             await ws.send_json(msg)
         except Exception:
             dead.add(ws)
-    _ws_clients -= dead
+    _ws_clients.difference_update(dead)
 
 
 @asynccontextmanager
