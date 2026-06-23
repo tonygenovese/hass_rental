@@ -7,7 +7,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import activity_log, ha_client, scheduler, settings
+from . import activity_log, ha_client, reservation_overrides, scheduler, settings
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -101,6 +101,81 @@ async def api_notify_services():
 @app.get("/api/upcoming-actions")
 async def api_upcoming_actions(limit: int = 5, offset: int = 0):
     return scheduler.get_upcoming_actions(limit, offset)
+
+
+@app.post("/api/reservation-override")
+async def api_reservation_override(body: dict):
+    uid = body.get("uid", "").strip()
+    if not uid:
+        return JSONResponse({"ok": False, "error": "uid required"}, status_code=400)
+    reservation_overrides.set_times(
+        uid,
+        check_in=body.get("check_in"),
+        check_out=body.get("check_out"),
+    )
+    activity_log.add("info", f"Times manually updated for reservation {uid}")
+    return {"ok": True}
+
+
+@app.get("/api/device-status")
+async def api_device_status():
+    cfg = settings.load()
+    lock_ids        = cfg.get("lock_entity_ids", [])
+    thermostat_id   = cfg.get("thermostat_entity_id", "")
+    valve_id        = cfg.get("water_valve_entity_id", "")
+
+    locks = []
+    for lid in lock_ids:
+        state = await ha_client.get_state(lid)
+        if not state:
+            continue
+        attrs = state.get("attributes", {})
+        code_slots = {}
+        for slot in range(1, 6):
+            key = f"code_slot_{slot}"
+            if key in attrs:
+                code_slots[str(slot)] = attrs[key]
+        locks.append({
+            "entity_id":     lid,
+            "name":          attrs.get("friendly_name", lid),
+            "state":         state.get("state"),
+            "battery_level": attrs.get("battery_level"),
+            "node_id":       attrs.get("node_id"),
+            "code_slots":    code_slots,
+        })
+
+    thermostat = None
+    if thermostat_id:
+        state = await ha_client.get_state(thermostat_id)
+        if state:
+            attrs = state.get("attributes", {})
+            thermostat = {
+                "entity_id":           thermostat_id,
+                "name":                attrs.get("friendly_name", thermostat_id),
+                "state":               state.get("state"),
+                "current_temperature": attrs.get("current_temperature"),
+                "target_temperature":  attrs.get("temperature"),
+                "hvac_action":         attrs.get("hvac_action"),
+                "unit":                attrs.get("temperature_unit", "°F"),
+            }
+
+    water_valve = None
+    if valve_id:
+        state = await ha_client.get_state(valve_id)
+        if state:
+            attrs = state.get("attributes", {})
+            water_valve = {
+                "entity_id": valve_id,
+                "name":      attrs.get("friendly_name", valve_id),
+                "state":     state.get("state"),
+            }
+
+    return {
+        "locks":         locks,
+        "thermostat":    thermostat,
+        "water_valve":   water_valve,
+        "managed_codes": scheduler.get_managed_codes(),
+    }
 
 
 @app.post("/api/refresh")

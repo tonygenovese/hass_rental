@@ -6,7 +6,7 @@ from typing import Any
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from . import activity_log, automations, ha_client, lock_manager, notifier, options as addon_options, settings
+from . import activity_log, automations, ha_client, lock_manager, notifier, options as addon_options, reservation_overrides, settings
 from .ical_parser import Reservation, fetch_reservations
 from .state_machine import RentalState, determine_state
 
@@ -28,11 +28,19 @@ broadcast_hook: Any = None
 def get_status() -> dict[str, Any]:
     active = _active_reservation
     nxt = _next_reservation
+
+    check_in = check_out = None
+    if active:
+        ov = reservation_overrides.get(active.uid)
+        check_in  = ov.get("check_in",  active.check_in.isoformat())
+        check_out = ov.get("check_out", active.check_out.isoformat())
+
     return {
         "state": _state,
         "current_guest": active.guest_name if active else None,
-        "check_in": active.check_in.isoformat() if active else None,
-        "check_out": active.check_out.isoformat() if active else None,
+        "uid": active.uid if active else None,
+        "check_in":  check_in,
+        "check_out": check_out,
         "guest_code": _active_guest_code if active else None,
         "phone_last4": active.phone_last4 if active else None,
         "next_guest": nxt.guest_name if nxt else None,
@@ -44,22 +52,30 @@ def get_status() -> dict[str, Any]:
 
 def get_reservations() -> list[dict[str, Any]]:
     now = datetime.now(timezone.utc)
-    return [
-        {
+    result = []
+    for r in _reservations:
+        if r.check_out <= now:
+            continue
+        ov = reservation_overrides.get(r.uid)
+        check_in  = ov.get("check_in",  r.check_in.isoformat())
+        check_out = ov.get("check_out", r.check_out.isoformat())
+        from datetime import datetime, timezone as _tz
+        ci = datetime.fromisoformat(check_in)
+        co = datetime.fromisoformat(check_out)
+        result.append({
             "guest_name": r.guest_name,
-            "check_in": r.check_in.isoformat(),
-            "check_out": r.check_out.isoformat(),
-            "duration_nights": max(1, (r.check_out.date() - r.check_in.date()).days),
+            "check_in":   check_in,
+            "check_out":  check_out,
+            "duration_nights": max(1, (co.date() - ci.date()).days),
             "is_active": r.is_active(now),
             "phone_last4": r.phone_last4,
             "email": r.email,
             "adults": r.adults,
             "reservation_code": r.reservation_code,
             "uid": r.uid,
-        }
-        for r in _reservations
-        if r.check_out > now
-    ]
+            "has_override": bool(ov),
+        })
+    return result
 
 
 async def _broadcast(msg: dict[str, Any]) -> None:
@@ -312,6 +328,17 @@ def get_upcoming_actions(limit: int = 5, offset: int = 0) -> dict:
 
     total = len(actions)
     return {"actions": actions[offset: offset + limit], "total": total, "offset": offset, "limit": limit}
+
+
+def get_managed_codes() -> dict:
+    cfg = settings.load()
+    return {
+        "guest_slot":        cfg.get("guest_code_slot", 2),
+        "cleaner_slot":      cfg.get("cleaner_code_slot", 3),
+        "active_guest_code": _active_guest_code,
+        "cleaner_code":      cfg.get("cleaner_code", ""),
+        "state":             _state,
+    }
 
 
 def start(poll_interval_minutes: int = 30) -> None:

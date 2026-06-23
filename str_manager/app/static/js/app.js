@@ -22,6 +22,7 @@ function showTab(name) {
   if (name === "upcoming") loadReservations();
   if (name === "log")      loadLog(1, logCurrentFilter);
   if (name === "actions")  loadActions();
+  if (name === "devices")  loadDevices();
   if (name === "settings") loadSettings();
 }
 
@@ -289,13 +290,161 @@ function actionTypeLabel(type) {
   return { checkin: "Check-in", checkout: "Check-out", cleaner_start: "Cleaner" }[type] || type;
 }
 
+// ── Inline time editing ────────────────────────────────────────────────────
+function startEditTime(field) {
+  const iso = field === "checkin" ? currentStatus.check_in : currentStatus.check_out;
+  if (iso) {
+    const d = new Date(iso);
+    const offset = d.getTimezoneOffset() * 60000;
+    document.getElementById(`${field}-input`).value =
+      new Date(d.getTime() - offset).toISOString().slice(0, 16);
+  }
+  document.getElementById(`${field}-time`).classList.add("hidden");
+  document.getElementById(`${field}-edit`).classList.remove("hidden");
+}
+
+function cancelEditTime(field) {
+  document.getElementById(`${field}-time`).classList.remove("hidden");
+  document.getElementById(`${field}-edit`).classList.add("hidden");
+}
+
+async function saveTime(field) {
+  const val = document.getElementById(`${field}-input`).value;
+  if (!val || !currentStatus.uid) return;
+
+  const isoUtc = new Date(val).toISOString();
+  const body = { uid: currentStatus.uid };
+  if (field === "checkin")  body.check_in  = isoUtc;
+  if (field === "checkout") body.check_out = isoUtc;
+
+  await fetch("api/reservation-override", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+  if (field === "checkin")  currentStatus.check_in  = isoUtc;
+  if (field === "checkout") currentStatus.check_out = isoUtc;
+  document.getElementById(`${field}-time`).textContent = formatDateTime(isoUtc);
+  cancelEditTime(field);
+}
+
+// ── Devices tab ────────────────────────────────────────────────────────────
+async function loadDevices() {
+  document.getElementById("devices-locks").innerHTML = '<div class="empty">Loading…</div>';
+
+  const data = await fetch("api/device-status").then(r => r.json());
+  const mc = data.managed_codes || {};
+
+  // Locks
+  const locksEl = document.getElementById("devices-locks");
+  if (data.locks && data.locks.length > 0) {
+    locksEl.innerHTML = data.locks.map(lock => {
+      const st = (lock.state || "").toLowerCase();
+      const stateClass = st === "locked" ? "state-locked" : st === "unlocked" ? "state-unlocked" : "state-unknown";
+      const stateLabel = lock.state ? lock.state.charAt(0).toUpperCase() + lock.state.slice(1) : "Unknown";
+
+      const slotsHtml = [1, 2, 3, 4, 5].map(i => {
+        const isGuest   = mc.guest_slot   === i;
+        const isCleaner = mc.cleaner_slot === i;
+        const managed   = isGuest || isCleaner;
+
+        let code = "——";
+        if (isGuest && mc.active_guest_code)   code = mc.active_guest_code;
+        else if (isCleaner && mc.cleaner_code) code = mc.cleaner_code;
+        else if (lock.code_slots?.[String(i)]) code = lock.code_slots[String(i)];
+
+        const tag = isGuest
+          ? `<span class="slot-tag tag-guest">Guest</span>`
+          : isCleaner
+          ? `<span class="slot-tag tag-cleaner">Cleaner</span>`
+          : `<span class="slot-tag tag-empty">—</span>`;
+
+        return `
+          <div class="slot-row${managed ? " slot-managed" : ""}">
+            <div class="slot-num">Slot ${i}</div>
+            <div class="slot-code">${esc(code)}</div>
+            ${tag}
+          </div>`;
+      }).join("");
+
+      return `
+        <div class="device-card">
+          <div class="device-card-head">
+            <div class="device-name">${esc(lock.name)}</div>
+            <div class="device-state-badge ${stateClass}">${stateLabel}</div>
+          </div>
+          ${lock.battery_level != null ? `<div class="device-battery">🔋 Battery: ${lock.battery_level}%</div>` : ""}
+          <div class="slot-list">${slotsHtml}</div>
+        </div>`;
+    }).join("");
+  } else {
+    locksEl.innerHTML = '<div class="empty">No locks configured.<br>Add lock entities in Settings.</div>';
+  }
+
+  // Thermostat
+  const thermoSection = document.getElementById("devices-thermostat-section");
+  const thermoEl      = document.getElementById("devices-thermostat");
+  if (data.thermostat) {
+    const t = data.thermostat;
+    thermoEl.innerHTML = `
+      <div class="device-card">
+        <div class="device-card-head">
+          <div class="device-name">${esc(t.name)}</div>
+          <div class="device-state-badge state-unknown">${esc(t.state || "—")}</div>
+        </div>
+        <div class="thermo-grid">
+          <div class="thermo-cell">
+            <div class="micro-label">Current</div>
+            <div class="thermo-val">${t.current_temperature != null ? t.current_temperature + esc(t.unit) : "—"}</div>
+          </div>
+          <div class="thermo-cell">
+            <div class="micro-label">Set To</div>
+            <div class="thermo-val">${t.target_temperature != null ? t.target_temperature + esc(t.unit) : "—"}</div>
+          </div>
+          <div class="thermo-cell">
+            <div class="micro-label">Action</div>
+            <div class="thermo-val">${esc(t.hvac_action || t.state || "—")}</div>
+          </div>
+        </div>
+      </div>`;
+    thermoSection.classList.remove("hidden");
+  } else {
+    thermoSection.classList.add("hidden");
+  }
+
+  // Water valve
+  const valveSection = document.getElementById("devices-valve-section");
+  const valveEl      = document.getElementById("devices-valve");
+  if (data.water_valve) {
+    const v = data.water_valve;
+    const vs = (v.state || "").toLowerCase();
+    const stateClass = (vs === "open" || vs === "on") ? "state-open"
+                     : (vs === "closed" || vs === "off") ? "state-closed"
+                     : "state-unknown";
+    const stateLabel = vs === "on" ? "Open" : vs === "off" ? "Closed"
+                     : v.state ? v.state.charAt(0).toUpperCase() + v.state.slice(1) : "Unknown";
+    valveEl.innerHTML = `
+      <div class="device-card">
+        <div class="device-card-head">
+          <div class="device-name">${esc(v.name)}</div>
+          <div class="device-state-badge ${stateClass}">${stateLabel}</div>
+        </div>
+      </div>`;
+    valveSection.classList.remove("hidden");
+  } else {
+    valveSection.classList.add("hidden");
+  }
+}
+
 // ── Settings ───────────────────────────────────────────────────────────────
 async function loadSettings() {
-  const [cfg, lockEntities, automationEntities, notifyServices] = await Promise.all([
+  const [cfg, lockEntities, automationEntities, notifyServices, climateEntities] = await Promise.all([
     fetch("api/settings").then(r => r.json()),
     fetch("api/ha/entities?domain=lock").then(r => r.json()),
     fetch("api/ha/entities?domain=automation").then(r => r.json()),
     fetch("api/ha/notify-services").then(r => r.json()),
+    fetch("api/ha/entities?domain=climate").then(r => r.json()),
   ]);
 
   allAutomations = automationEntities;
@@ -323,6 +472,10 @@ async function loadSettings() {
   renderAutomationList("checkin",    cfg.checkin_automation_ids      || [], automationEntities);
   renderAutomationList("checkout",   cfg.checkout_automation_ids     || [], automationEntities);
   renderAutomationList("precheckin", cfg.pre_checkin_automation_ids  || [], automationEntities);
+
+  populateSelect("thermostat_entity_id", climateEntities, cfg.thermostat_entity_id || "", "None");
+  const valveEl = document.getElementById("water_valve_entity_id");
+  if (valveEl) valveEl.value = cfg.water_valve_entity_id || "";
 }
 
 function renderLockList(selected, entities) {
@@ -405,15 +558,16 @@ async function saveSettings(e) {
   const statusEl = document.getElementById("save-status");
 
   const data = {};
-  ["ical_url", "cleaner_code", "property_timezone"].forEach(f => data[f] = document.getElementById(f).value.trim());
+  ["ical_url", "cleaner_code", "property_timezone", "water_valve_entity_id"].forEach(f => data[f] = document.getElementById(f).value.trim());
   ["poll_interval_minutes", "guest_code_slot", "cleaner_code_slot"].forEach(f =>
     data[f] = parseInt(document.getElementById(f).value, 10)
   );
   ["default_checkin_time", "default_checkout_time"].forEach(f =>
     data[f] = document.getElementById(f).value
   );
-  data.lock_entity_ids         = [...document.querySelectorAll("#lock_entities select")].map(s => s.value).filter(Boolean);
-  data.notify_service          = document.getElementById("notify_service").value;
+  data.lock_entity_ids             = [...document.querySelectorAll("#lock_entities select")].map(s => s.value).filter(Boolean);
+  data.notify_service              = document.getElementById("notify_service").value;
+  data.thermostat_entity_id        = document.getElementById("thermostat_entity_id").value;
   data.checkin_automation_ids      = [...document.querySelectorAll("#checkin_automations select")].map(s => s.value).filter(Boolean);
   data.checkout_automation_ids     = [...document.querySelectorAll("#checkout_automations select")].map(s => s.value).filter(Boolean);
   data.pre_checkin_automation_ids  = [...document.querySelectorAll("#precheckin_automations select")].map(s => s.value).filter(Boolean);

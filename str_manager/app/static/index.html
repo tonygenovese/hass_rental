@@ -50,6 +50,9 @@
     <button class="tab-btn" data-tab="actions">
       <span class="tab-icon">⚡</span> Actions
     </button>
+    <button class="tab-btn" data-tab="devices">
+      <span class="tab-icon">🔌</span> Devices
+    </button>
     <button class="tab-btn" data-tab="settings">
       <span class="tab-icon">⚙️</span> Settings
     </button>
@@ -74,13 +77,27 @@
       <div id="active-card" class="guest-block hidden">
         <div class="guest-name-text" id="guest-name">—</div>
         <div class="date-grid">
-          <div class="date-cell">
-            <div class="micro-label">Check-in</div>
+          <div class="date-cell editable-cell" id="checkin-cell" onclick="startEditTime('checkin')">
+            <div class="micro-label">Check-in <span class="edit-hint">✎</span></div>
             <div class="date-val" id="checkin-time">—</div>
+            <div class="time-edit hidden" id="checkin-edit">
+              <input type="datetime-local" id="checkin-input" onclick="event.stopPropagation()" />
+              <div class="edit-btns">
+                <button class="edit-save" onclick="event.stopPropagation(); saveTime('checkin')">Save</button>
+                <button class="edit-cancel" onclick="event.stopPropagation(); cancelEditTime('checkin')">Cancel</button>
+              </div>
+            </div>
           </div>
-          <div class="date-cell">
-            <div class="micro-label">Check-out</div>
+          <div class="date-cell editable-cell" id="checkout-cell" onclick="startEditTime('checkout')">
+            <div class="micro-label">Check-out <span class="edit-hint">✎</span></div>
             <div class="date-val" id="checkout-time">—</div>
+            <div class="time-edit hidden" id="checkout-edit">
+              <input type="datetime-local" id="checkout-input" onclick="event.stopPropagation()" />
+              <div class="edit-btns">
+                <button class="edit-save" onclick="event.stopPropagation(); saveTime('checkout')">Save</button>
+                <button class="edit-cancel" onclick="event.stopPropagation(); cancelEditTime('checkout')">Cancel</button>
+              </div>
+            </div>
           </div>
         </div>
         <div class="code-box">
@@ -180,6 +197,34 @@
   </div>
 
   <!-- ══════════════════════════════════════════════════════════════════ -->
+  <!-- DEVICES                                                            -->
+  <!-- ══════════════════════════════════════════════════════════════════ -->
+  <div id="tab-devices" class="tab-content content hidden">
+    <div class="devices-header">
+      <span class="devices-title">Device Status</span>
+      <button class="icon-btn" onclick="loadDevices()" title="Refresh devices">↻</button>
+    </div>
+
+    <!-- Locks -->
+    <div class="device-section-label">Locks</div>
+    <div id="devices-locks">
+      <div class="empty">Loading…</div>
+    </div>
+
+    <!-- Thermostat -->
+    <div id="devices-thermostat-section" class="hidden">
+      <div class="device-section-label">Thermostat</div>
+      <div id="devices-thermostat"></div>
+    </div>
+
+    <!-- Water Valve -->
+    <div id="devices-valve-section" class="hidden">
+      <div class="device-section-label">Water Valve</div>
+      <div id="devices-valve"></div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════════════ -->
   <!-- SETTINGS                                                           -->
   <!-- ══════════════════════════════════════════════════════════════════ -->
   <div id="tab-settings" class="tab-content content hidden" style="padding-bottom:90px;">
@@ -268,6 +313,25 @@
             <div id="precheckin_automations"></div>
             <button type="button" class="add-auto" onclick="addAutomation('precheckin')">+ Add automation</button>
             <div class="field-hint">Triggered automatically when the cleaner locks the door and leaves.</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Device Monitoring -->
+      <div class="settings-group">
+        <div class="settings-group-title">🔌 Device Monitoring</div>
+        <div class="settings-fields">
+          <div class="field">
+            <label for="thermostat_entity_id">Thermostat Entity</label>
+            <select id="thermostat_entity_id">
+              <option value="">None</option>
+            </select>
+            <div class="field-hint">Shown in the Devices tab — no automations run on it.</div>
+          </div>
+          <div class="field">
+            <label for="water_valve_entity_id">Water Valve Entity</label>
+            <input type="text" id="water_valve_entity_id" placeholder="e.g. valve.main_water" />
+            <div class="field-hint">Any HA entity that controls your water shutoff (valve.*, switch.*, etc.)</div>
           </div>
         </div>
       </div>
