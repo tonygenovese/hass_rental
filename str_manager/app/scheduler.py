@@ -59,7 +59,6 @@ def get_reservations() -> list[dict[str, Any]]:
         ov = reservation_overrides.get(r.uid)
         check_in  = ov.get("check_in",  r.check_in.isoformat())
         check_out = ov.get("check_out", r.check_out.isoformat())
-        from datetime import datetime, timezone as _tz
         ci = datetime.fromisoformat(check_in)
         co = datetime.fromisoformat(check_out)
         result.append({
