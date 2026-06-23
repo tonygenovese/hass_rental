@@ -73,7 +73,12 @@ def _parse_description(desc: str) -> dict:
     first = last = ""
 
     for line in lines:
-        # Reservation / confirmation code
+        # Airbnb format: "Reservation URL: .../details/HMWXK8PNDB"
+        m = re.search(r"reservations/details/([A-Z0-9]+)", line, re.IGNORECASE)
+        if m and not out["reservation_code"]:
+            out["reservation_code"] = m.group(1).upper()
+
+        # Generic reservation/confirmation code line
         m = re.match(r"(?:reservation|confirmation)\s*(?:code|id)\s*:\s*(\S+)", line, re.IGNORECASE)
         if m and not out["reservation_code"]:
             out["reservation_code"] = m.group(1).strip()
@@ -93,12 +98,14 @@ def _parse_description(desc: str) -> dict:
         if m and not last:
             last = m.group(1).strip()
 
-        # Phone — extract last 4 digits
-        m = re.search(r"phone(?:\s*number)?\s*:\s*([\d\s\-\+\(\)\.x]+)", line, re.IGNORECASE)
+        # Phone — "phone[anything]:" handles "Phone Number (Last 4 Digits):"
+        m = re.search(r"phone[^:]*:\s*([\d\s\-\+\(\)\.x]+)", line, re.IGNORECASE)
         if m and not out["phone_last4"]:
             digits = re.sub(r"\D", "", m.group(1))
             if len(digits) >= 4:
                 out["phone_last4"] = digits[-4:]
+            elif len(digits) > 0:
+                out["phone_last4"] = digits  # already just the last 4
 
         # Email
         m = re.search(r"email\s*:\s*(\S+@\S+)", line, re.IGNORECASE)
@@ -110,7 +117,7 @@ def _parse_description(desc: str) -> dict:
         if m and not out["adults"]:
             out["adults"] = int(m.group(1))
 
-        # Check-in time from description (e.g. "CHECKIN: 2024-06-21 15:00" or "Check-in: 3:00 PM")
+        # Check-in/out times if present in description
         m = re.match(r"check[\s\-]?in\s*:\s*.+?(?:at\s+)?([\d:]+\s*(?:AM|PM)?)\s*$", line, re.IGNORECASE)
         if m and out["checkin_time"] is None:
             out["checkin_time"] = _parse_time(m.group(1))
@@ -166,6 +173,9 @@ async def fetch_reservations(
 
         if info["name"]:
             guest_name = info["name"]
+        elif info["reservation_code"]:
+            # Airbnb doesn't include guest names — use reservation code
+            guest_name = info["reservation_code"]
         else:
             guest_name = re.sub(
                 r"^(Reserved\s*[-–]?\s*|Airbnb\s*[-–]?\s*)", "", summary, flags=re.IGNORECASE
