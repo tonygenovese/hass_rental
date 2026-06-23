@@ -8,6 +8,22 @@
 </head>
 <body>
 
+  <!-- ── Test mode banner ────────────────────────────────────────────── -->
+  <div id="test-banner" class="test-banner hidden">
+    ⚠️ TEST MODE — lock codes &amp; automations are simulated, nothing executes
+  </div>
+
+  <!-- ── Reservation detail modal ─────────────────────────────────────── -->
+  <div id="res-modal" class="modal hidden" onclick="closeResModal(event)">
+    <div class="modal-panel">
+      <div class="modal-head">
+        <div class="modal-title">Reservation Details</div>
+        <button class="modal-close" onclick="closeResModal()">✕</button>
+      </div>
+      <div id="modal-body" class="modal-body"></div>
+    </div>
+  </div>
+
   <!-- ── Header ──────────────────────────────────────────────────────── -->
   <header class="app-header">
     <span class="app-title">Rental Manager</span>
@@ -176,6 +192,11 @@
           <div class="field">
             <label for="ical_url">Airbnb iCal URL</label>
             <input type="url" id="ical_url" placeholder="https://www.airbnb.com/calendar/ical/…" />
+          </div>
+          <div class="field">
+            <label for="property_timezone">Property Timezone</label>
+            <input type="text" id="property_timezone" placeholder="e.g. America/New_York" />
+            <div class="field-hint">IANA timezone name — used for correct check-in/out times. <a class="tz-link" href="https://en.wikipedia.org/wiki/List_of_tz_database_time_zones" target="_blank">Find yours →</a></div>
           </div>
           <div class="field">
             <label for="poll_interval_minutes">Sync Interval (minutes)</label>

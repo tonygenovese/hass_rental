@@ -7,6 +7,7 @@ SETTINGS_PATH = "/data/settings.json"
 DEFAULTS: dict[str, Any] = {
     "ical_url": "",
     "poll_interval_minutes": 30,
+    "property_timezone": "America/New_York",
     "default_checkin_time": "15:00",
     "default_checkout_time": "11:00",
     "lock_entity_ids": [],

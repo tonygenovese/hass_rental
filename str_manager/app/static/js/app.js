@@ -60,6 +60,7 @@ async function loadDashboard() {
 
 function renderStatus(data) {
   currentStatus = data;
+  document.getElementById("test-banner").classList.toggle("hidden", !data.test_mode);
   const card   = document.getElementById("status-card");
   const label  = document.getElementById("status-label");
   const icon   = document.getElementById("status-icon");
@@ -146,7 +147,7 @@ async function loadReservations() {
     return;
   }
   el.innerHTML = data.map(r => `
-    <div class="res-card ${r.is_active ? "active-res" : ""}">
+    <div class="res-card ${r.is_active ? "active-res" : ""}" onclick='openResModal(${JSON.stringify(r).replace(/'/g, "&#39;")})'>
       <div class="res-top">
         <div>
           <div class="res-name">${esc(r.guest_name)}</div>
@@ -213,6 +214,34 @@ document.querySelectorAll(".filter-btn").forEach(btn => {
   btn.addEventListener("click", () => loadLog(1, btn.dataset.filter));
 });
 
+// ── Reservation modal ──────────────────────────────────────────────────────
+function openResModal(r) {
+  const rows = [
+    ["Guest",            esc(r.guest_name)],
+    r.phone_last4   ? ["Phone",       `···-${esc(r.phone_last4)}`]       : null,
+    r.email         ? ["Email",       esc(r.email)]                      : null,
+    r.adults        ? ["Adults",      r.adults]                          : null,
+    ["Check-in",         formatDateTime(r.check_in)],
+    ["Check-out",        formatDateTime(r.check_out)],
+    ["Duration",         `${r.duration_nights} night${r.duration_nights !== 1 ? "s" : ""}`],
+    r.reservation_code ? ["Reservation Code", esc(r.reservation_code)]  : null,
+    r.uid           ? ["UID",         esc(r.uid)]                        : null,
+  ].filter(Boolean);
+
+  document.getElementById("modal-body").innerHTML = rows.map(([label, val]) => `
+    <div class="modal-row">
+      <div class="modal-label">${label}</div>
+      <div class="modal-value">${val}</div>
+    </div>`).join("");
+  document.getElementById("res-modal").classList.remove("hidden");
+}
+
+function closeResModal(e) {
+  if (!e || e.target === document.getElementById("res-modal")) {
+    document.getElementById("res-modal").classList.add("hidden");
+  }
+}
+
 // ── Upcoming Actions ───────────────────────────────────────────────────────
 async function loadActions(append = false) {
   if (!append) {
@@ -272,7 +301,7 @@ async function loadSettings() {
   allAutomations = automationEntities;
   window._lockEntities = lockEntities;
 
-  const fields = ["ical_url", "poll_interval_minutes", "default_checkin_time",
+  const fields = ["ical_url", "property_timezone", "poll_interval_minutes", "default_checkin_time",
     "default_checkout_time", "guest_code_slot", "cleaner_code_slot", "cleaner_code"];
   fields.forEach(f => { const el = document.getElementById(f); if (el) el.value = cfg[f] ?? ""; });
 
@@ -376,7 +405,7 @@ async function saveSettings(e) {
   const statusEl = document.getElementById("save-status");
 
   const data = {};
-  ["ical_url", "cleaner_code"].forEach(f => data[f] = document.getElementById(f).value.trim());
+  ["ical_url", "cleaner_code", "property_timezone"].forEach(f => data[f] = document.getElementById(f).value.trim());
   ["poll_interval_minutes", "guest_code_slot", "cleaner_code_slot"].forEach(f =>
     data[f] = parseInt(document.getElementById(f).value, 10)
   );

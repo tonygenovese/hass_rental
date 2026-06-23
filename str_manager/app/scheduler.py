@@ -6,7 +6,7 @@ from typing import Any
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from . import activity_log, automations, ha_client, lock_manager, notifier, settings
+from . import activity_log, automations, ha_client, lock_manager, notifier, options as addon_options, settings
 from .ical_parser import Reservation, fetch_reservations
 from .state_machine import RentalState, determine_state
 
@@ -38,6 +38,7 @@ def get_status() -> dict[str, Any]:
         "next_guest": nxt.guest_name if nxt else None,
         "next_check_in": nxt.check_in.isoformat() if nxt else None,
         "last_sync": _last_sync.isoformat() if _last_sync else None,
+        "test_mode": addon_options.test_mode(),
     }
 
 
@@ -51,6 +52,10 @@ def get_reservations() -> list[dict[str, Any]]:
             "duration_nights": max(1, (r.check_out.date() - r.check_in.date()).days),
             "is_active": r.is_active(now),
             "phone_last4": r.phone_last4,
+            "email": r.email,
+            "adults": r.adults,
+            "reservation_code": r.reservation_code,
+            "uid": r.uid,
         }
         for r in _reservations
         if r.check_out > now
@@ -72,56 +77,73 @@ async def _handle_transition(old: RentalState, new: RentalState, reservation: Re
     cleaner_code = cfg.get("cleaner_code", "")
     notify_svc   = cfg.get("notify_service", "")
     guest_name   = reservation.guest_name if reservation else "Guest"
+    dry          = addon_options.test_mode()
+    pfx          = "[TEST] " if dry else ""
 
     if new == RentalState.OCCUPIED:
         _guest_first_entry_logged = False
         _cleaner_present = False
-        _active_guest_code = str(random.randint(100000, 999999))
+        # Use phone last 4 as the access code; fall back to random 4-digit PIN
+        if reservation and reservation.phone_last4:
+            _active_guest_code = reservation.phone_last4
+        else:
+            _active_guest_code = str(random.randint(1000, 9999))
 
-        for lid in lock_ids:
-            await lock_manager.set_code(lid, guest_slot, _active_guest_code)
         if lock_ids:
-            activity_log.add("code_set", f"Guest code set in slot {guest_slot}: {_active_guest_code}", guest_name)
+            if not dry:
+                for lid in lock_ids:
+                    await lock_manager.set_code(lid, guest_slot, _active_guest_code)
+            activity_log.add("code_set", f"{pfx}Guest code set in slot {guest_slot}: {_active_guest_code}", guest_name)
 
-        if old == RentalState.CLEANER:
-            for lid in lock_ids:
-                await lock_manager.clear_code(lid, cleaner_slot)
-            if lock_ids:
-                activity_log.add("code_cleared", f"Cleaner code cleared from slot {cleaner_slot}")
+        if old == RentalState.CLEANER and lock_ids:
+            if not dry:
+                for lid in lock_ids:
+                    await lock_manager.clear_code(lid, cleaner_slot)
+            activity_log.add("code_cleared", f"{pfx}Cleaner code cleared from slot {cleaner_slot}")
 
         msg = f"Guest checked in. Access code: {_active_guest_code}"
-        await notifier.send(notify_svc, f"Check-in: {guest_name}", msg, "str_mgr_checkin")
-        activity_log.add("checkin", f"{guest_name} checked in. Code: {_active_guest_code}", guest_name)
-        await automations.trigger(cfg.get("checkin_automation_ids", []))
+        if not dry:
+            await notifier.send(notify_svc, f"Check-in: {guest_name}", msg, "str_mgr_checkin")
+        activity_log.add("checkin", f"{pfx}{guest_name} checked in. Code: {_active_guest_code}", guest_name)
+        if not dry:
+            await automations.trigger(cfg.get("checkin_automation_ids", []))
+        elif cfg.get("checkin_automation_ids"):
+            activity_log.add("info", f"{pfx}Would trigger {len(cfg['checkin_automation_ids'])} check-in automation(s)")
 
     elif new == RentalState.CLEANER and old != RentalState.OCCUPIED:
-        for lid in lock_ids:
-            if cleaner_code:
-                await lock_manager.set_code(lid, cleaner_slot, cleaner_code)
         if lock_ids and cleaner_code:
-            activity_log.add("code_set", f"Cleaner code restored in slot {cleaner_slot} (startup recovery)")
+            if not dry:
+                for lid in lock_ids:
+                    await lock_manager.set_code(lid, cleaner_slot, cleaner_code)
+            activity_log.add("code_set", f"{pfx}Cleaner code restored in slot {cleaner_slot} (startup recovery)")
 
     elif old == RentalState.OCCUPIED and new in (RentalState.VACANT, RentalState.CLEANER):
         _cleaner_present = False
-        for lid in lock_ids:
-            await lock_manager.clear_code(lid, guest_slot)
         if lock_ids:
-            activity_log.add("code_cleared", f"Guest code cleared from slot {guest_slot}", guest_name)
+            if not dry:
+                for lid in lock_ids:
+                    await lock_manager.clear_code(lid, guest_slot)
+            activity_log.add("code_cleared", f"{pfx}Guest code cleared from slot {guest_slot}", guest_name)
 
         if new == RentalState.CLEANER:
-            for lid in lock_ids:
-                if cleaner_code:
-                    await lock_manager.set_code(lid, cleaner_slot, cleaner_code)
             if lock_ids and cleaner_code:
-                activity_log.add("code_set", f"Cleaner code set in slot {cleaner_slot}")
-            await notifier.send(notify_svc, "Guest Checked Out", "Cleaner mode active.", "str_mgr_checkout")
-            activity_log.add("checkout", f"{guest_name} checked out. Cleaner mode active.", guest_name)
+                if not dry:
+                    for lid in lock_ids:
+                        await lock_manager.set_code(lid, cleaner_slot, cleaner_code)
+                activity_log.add("code_set", f"{pfx}Cleaner code set in slot {cleaner_slot}")
+            if not dry:
+                await notifier.send(notify_svc, "Guest Checked Out", "Cleaner mode active.", "str_mgr_checkout")
+            activity_log.add("checkout", f"{pfx}{guest_name} checked out. Cleaner mode active.", guest_name)
         else:
-            await notifier.send(notify_svc, "Guest Checked Out", "Property is vacant.", "str_mgr_checkout")
-            activity_log.add("checkout", f"{guest_name} checked out. Property vacant.", guest_name)
+            if not dry:
+                await notifier.send(notify_svc, "Guest Checked Out", "Property is vacant.", "str_mgr_checkout")
+            activity_log.add("checkout", f"{pfx}{guest_name} checked out. Property vacant.", guest_name)
 
         _active_guest_code = ""
-        await automations.trigger(cfg.get("checkout_automation_ids", []))
+        if not dry:
+            await automations.trigger(cfg.get("checkout_automation_ids", []))
+        elif cfg.get("checkout_automation_ids"):
+            activity_log.add("info", f"{pfx}Would trigger {len(cfg['checkout_automation_ids'])} check-out automation(s)")
 
     await _broadcast({"type": "status_update", "data": get_status()})
     await _broadcast({"type": "log_update", "data": activity_log.recent(5)})
@@ -140,6 +162,7 @@ async def poll() -> None:
             ical_url,
             cfg.get("default_checkin_time", "15:00"),
             cfg.get("default_checkout_time", "11:00"),
+            cfg.get("property_timezone", "America/New_York"),
         )
         _last_sync = datetime.now(timezone.utc)
     except Exception as exc:
@@ -213,12 +236,18 @@ async def handle_lock_event(event_data: dict[str, Any]) -> None:
 
     elif event_type in {1, 3, 5} and _cleaner_present:  # Any lock event while cleaner is inside
         _cleaner_present = False
+        dry = addon_options.test_mode()
+        pfx = "[TEST] " if dry else ""
         msg = "Cleaner locked up and left the property."
-        await notifier.send(notify_svc, "Cleaner Left", msg, "str_mgr_cleaner_exit")
-        activity_log.add("cleaner_entry", msg)
+        if not dry:
+            await notifier.send(notify_svc, "Cleaner Left", msg, "str_mgr_cleaner_exit")
+        activity_log.add("cleaner_entry", f"{pfx}{msg}")
         pre_autos = cfg.get("pre_checkin_automation_ids", [])
         if pre_autos:
-            await automations.trigger(pre_autos)
+            if not dry:
+                await automations.trigger(pre_autos)
+            else:
+                activity_log.add("info", f"{pfx}Would trigger {len(pre_autos)} pre-check-in automation(s)")
         await _broadcast({"type": "log_update", "data": activity_log.recent(5)})
 
 

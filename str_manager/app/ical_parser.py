@@ -2,6 +2,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import aiohttp
 from icalendar import Calendar
@@ -15,6 +16,10 @@ class Reservation:
     check_in: datetime
     check_out: datetime
     phone_last4: str = field(default="")
+    email: str = field(default="")
+    adults: int = field(default=0)
+    reservation_code: str = field(default="")
+    uid: str = field(default="")
 
     def is_active(self, now: datetime) -> bool:
         return self.check_in <= now < self.check_out
@@ -24,38 +29,63 @@ class Reservation:
         return delta.total_seconds() / 3600
 
 
-def _to_datetime(val: date | datetime, fallback_time: time, tz: timezone) -> datetime:
+def _get_tz(tz_string: str) -> timezone | ZoneInfo:
+    try:
+        return ZoneInfo(tz_string)
+    except (ZoneInfoNotFoundError, Exception):
+        logger.warning("Unknown timezone %r, falling back to UTC", tz_string)
+        return timezone.utc
+
+
+def _to_datetime(val: date | datetime, fallback_time: time, tz) -> datetime:
     if isinstance(val, datetime):
         if val.tzinfo is None:
             return val.replace(tzinfo=tz)
-        return val.astimezone(tz)
-    return datetime.combine(val, fallback_time, tzinfo=tz)
+        return val.astimezone(timezone.utc)
+    # Date-only: combine with the fallback time in the property's local timezone
+    return datetime.combine(val, fallback_time, tzinfo=tz).astimezone(timezone.utc)
 
 
-def _parse_description(desc: str) -> tuple[str, str]:
-    """Extract (guest_name, phone_last4) from an Airbnb iCal DESCRIPTION."""
+def _parse_time(s: str) -> time | None:
+    """Try to parse a time string like '3:00 PM', '15:00', '15:00:00'."""
+    s = s.strip()
+    for fmt in ("%I:%M %p", "%I:%M%p", "%H:%M:%S", "%H:%M"):
+        try:
+            return datetime.strptime(s, fmt).time()
+        except ValueError:
+            pass
+    return None
+
+
+def _parse_description(desc: str) -> dict:
+    """Extract structured guest info from an Airbnb iCal DESCRIPTION."""
+    out = {
+        "name": "", "phone_last4": "", "email": "",
+        "adults": 0, "reservation_code": "",
+        "checkin_time": None, "checkout_time": None,
+    }
     if not desc:
-        return "", ""
+        return out
 
-    # Normalize line endings and escaped newlines from iCal encoding
+    # Normalize all line ending variants
     desc = desc.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\r\n", "\n")
     lines = [l.strip() for l in desc.split("\n")]
-
-    name = ""
-    first = ""
-    last = ""
-    phone_last4 = ""
+    first = last = ""
 
     for line in lines:
-        # Full name patterns: "Guest Name: John Smith", "Name: John Smith", "Guest: John Smith"
-        m = re.match(r"(?:guest\s*name|full\s*name|name|guest)\s*:\s*(.+)", line, re.IGNORECASE)
-        if m and not name:
-            candidate = m.group(1).strip()
-            # Skip if it looks like metadata (e.g. "Name: 2 guests")
-            if not re.search(r"\d+\s+guest", candidate, re.IGNORECASE):
-                name = candidate
+        # Reservation / confirmation code
+        m = re.match(r"(?:reservation|confirmation)\s*(?:code|id)\s*:\s*(\S+)", line, re.IGNORECASE)
+        if m and not out["reservation_code"]:
+            out["reservation_code"] = m.group(1).strip()
 
-        # First / last name split
+        # Full name
+        m = re.match(r"(?:guest\s*name|full\s*name|name|guest)\s*:\s*(.+)", line, re.IGNORECASE)
+        if m and not out["name"]:
+            candidate = m.group(1).strip()
+            if not re.search(r"\d+\s+guest", candidate, re.IGNORECASE):
+                out["name"] = candidate
+
+        # First / last name on separate lines
         m = re.match(r"first\s*(?:name)?\s*:\s*(.+)", line, re.IGNORECASE)
         if m and not first:
             first = m.group(1).strip()
@@ -63,27 +93,47 @@ def _parse_description(desc: str) -> tuple[str, str]:
         if m and not last:
             last = m.group(1).strip()
 
-        # Phone: extract last 4 digits
+        # Phone — extract last 4 digits
         m = re.search(r"phone(?:\s*number)?\s*:\s*([\d\s\-\+\(\)\.x]+)", line, re.IGNORECASE)
-        if m and not phone_last4:
+        if m and not out["phone_last4"]:
             digits = re.sub(r"\D", "", m.group(1))
             if len(digits) >= 4:
-                phone_last4 = digits[-4:]
+                out["phone_last4"] = digits[-4:]
 
-    if not name and (first or last):
-        name = f"{first} {last}".strip()
+        # Email
+        m = re.search(r"email\s*:\s*(\S+@\S+)", line, re.IGNORECASE)
+        if m and not out["email"]:
+            out["email"] = m.group(1).strip()
 
-    return name, phone_last4
+        # Adults / guests count
+        m = re.match(r"(?:adults|guests)\s*:\s*(\d+)", line, re.IGNORECASE)
+        if m and not out["adults"]:
+            out["adults"] = int(m.group(1))
+
+        # Check-in time from description (e.g. "CHECKIN: 2024-06-21 15:00" or "Check-in: 3:00 PM")
+        m = re.match(r"check[\s\-]?in\s*:\s*.+?(?:at\s+)?([\d:]+\s*(?:AM|PM)?)\s*$", line, re.IGNORECASE)
+        if m and out["checkin_time"] is None:
+            out["checkin_time"] = _parse_time(m.group(1))
+
+        m = re.match(r"check[\s\-]?out\s*:\s*.+?(?:at\s+)?([\d:]+\s*(?:AM|PM)?)\s*$", line, re.IGNORECASE)
+        if m and out["checkout_time"] is None:
+            out["checkout_time"] = _parse_time(m.group(1))
+
+    if not out["name"] and (first or last):
+        out["name"] = f"{first} {last}".strip()
+
+    return out
 
 
 async def fetch_reservations(
     ical_url: str,
     default_checkin: str = "15:00",
     default_checkout: str = "11:00",
+    property_timezone: str = "UTC",
 ) -> list[Reservation]:
-    checkin_time = time.fromisoformat(default_checkin)
-    checkout_time = time.fromisoformat(default_checkout)
-    tz = timezone.utc
+    default_checkin_time  = time.fromisoformat(default_checkin)
+    default_checkout_time = time.fromisoformat(default_checkout)
+    tz = _get_tz(property_timezone)
 
     async with aiohttp.ClientSession() as session:
         async with session.get(ical_url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
@@ -103,25 +153,33 @@ async def fetch_reservations(
         if not dtstart or not dtend:
             continue
 
+        uid  = str(component.get("UID", ""))
+        desc = str(component.get("DESCRIPTION", ""))
+        info = _parse_description(desc)
+
+        # Use times from description if found, else use settings defaults
+        checkin_time  = info["checkin_time"]  or default_checkin_time
+        checkout_time = info["checkout_time"] or default_checkout_time
+
         check_in  = _to_datetime(dtstart.dt, checkin_time, tz)
         check_out = _to_datetime(dtend.dt, checkout_time, tz)
 
-        desc = str(component.get("DESCRIPTION", ""))
-        name_from_desc, phone_last4 = _parse_description(desc)
-
-        if name_from_desc:
-            guest_name = name_from_desc
+        if info["name"]:
+            guest_name = info["name"]
         else:
-            # Strip Airbnb prefixes from SUMMARY as fallback
-            guest_name = re.sub(r"^(Reserved\s*[-–]?\s*|Airbnb\s*[-–]?\s*)", "", summary, flags=re.IGNORECASE).strip()
-            if not guest_name:
-                guest_name = summary
+            guest_name = re.sub(
+                r"^(Reserved\s*[-–]?\s*|Airbnb\s*[-–]?\s*)", "", summary, flags=re.IGNORECASE
+            ).strip() or summary
 
         reservations.append(Reservation(
             guest_name=guest_name,
             check_in=check_in,
             check_out=check_out,
-            phone_last4=phone_last4,
+            phone_last4=info["phone_last4"],
+            email=info["email"],
+            adults=info["adults"],
+            reservation_code=info["reservation_code"],
+            uid=uid,
         ))
 
     reservations.sort(key=lambda r: r.check_in)
