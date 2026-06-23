@@ -130,17 +130,27 @@ async def api_device_status():
         if not state:
             continue
         attrs = state.get("attributes", {})
-        code_slots = {}
-        for slot in range(1, 6):
+        node_id = attrs.get("node_id")
+
+        # Start with any codes already exposed as entity attributes
+        code_slots: dict[str, str] = {}
+        for slot in range(1, 11):
             key = f"code_slot_{slot}"
             if key in attrs:
                 code_slots[str(slot)] = attrs[key]
+
+        # Supplement via Z-Wave JS WS API (reads the node's value cache)
+        if node_id is not None:
+            zwave_codes = await ha_client.get_lock_usercodes(lid, node_id, max_slots=10)
+            for k, v in zwave_codes.items():
+                code_slots.setdefault(k, v)
+
         locks.append({
             "entity_id":     lid,
             "name":          attrs.get("friendly_name", lid),
             "state":         state.get("state"),
             "battery_level": attrs.get("battery_level"),
-            "node_id":       attrs.get("node_id"),
+            "node_id":       node_id,
             "code_slots":    code_slots,
         })
 

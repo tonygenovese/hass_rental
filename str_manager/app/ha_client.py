@@ -71,6 +71,65 @@ async def get_state(entity_id: str) -> dict[str, Any] | None:
             return await resp.json()
 
 
+async def get_lock_usercodes(entity_id: str, node_id: int, max_slots: int = 10) -> dict[str, str]:
+    """
+    Query Z-Wave JS usercode values for slots 1‥max_slots.
+    Returns {slot_str: code_str} for every non-empty slot.
+    Uses a short-lived WS connection so as not to disturb the event listener.
+    """
+    import websockets
+
+    results: dict[str, str] = {}
+    try:
+        async with websockets.connect(WS_URL, open_timeout=5, ping_timeout=5) as ws:
+            # Auth
+            await ws.recv()  # auth_required
+            await ws.send(json.dumps({"type": "auth", "access_token": _token()}))
+            auth_ok = json.loads(await ws.recv())
+            if auth_ok.get("type") != "auth_ok":
+                return results
+
+            # Resolve config_entry_id for the entity
+            await ws.send(json.dumps({"id": 1, "type": "config/entity_registry/get", "entity_id": entity_id}))
+            reg = json.loads(await ws.recv())
+            entry_id = (reg.get("result") or {}).get("config_entry_id")
+            if not entry_id:
+                logger.warning("get_lock_usercodes: no config_entry_id for %s", entity_id)
+                return results
+
+            # Send all slot queries in one burst
+            slot_for_id: dict[int, int] = {}
+            for slot in range(1, max_slots + 1):
+                mid = slot + 1  # ids start at 2 (1 was used above)
+                slot_for_id[mid] = slot
+                await ws.send(json.dumps({
+                    "id": mid,
+                    "type": "zwave_js/get_value",
+                    "entry_id": entry_id,
+                    "node_id": node_id,
+                    "command_class": 99,   # Access Control / UserCode
+                    "endpoint": 0,
+                    "property": "userCode",
+                    "property_key": slot,
+                }))
+
+            # Collect responses (one per slot, with timeout)
+            for _ in range(max_slots):
+                try:
+                    raw = await asyncio.wait_for(ws.recv(), timeout=3.0)
+                    resp = json.loads(raw)
+                    slot = slot_for_id.get(resp.get("id"))
+                    if slot and resp.get("success"):
+                        val = resp.get("result")
+                        if val and str(val).strip():
+                            results[str(slot)] = str(val).strip()
+                except asyncio.TimeoutError:
+                    break
+    except Exception as exc:
+        logger.error("get_lock_usercodes(%s) failed: %s", entity_id, exc)
+    return results
+
+
 async def reload_addon_store() -> bool:
     """Tell the Supervisor to re-fetch all add-on repositories."""
     try:

@@ -344,15 +344,19 @@ async function loadDevices() {
       const stateClass = st === "locked" ? "state-locked" : st === "unlocked" ? "state-unlocked" : "state-unknown";
       const stateLabel = lock.state ? lock.state.charAt(0).toUpperCase() + lock.state.slice(1) : "Unknown";
 
-      const slotsHtml = [1, 2, 3, 4, 5].map(i => {
+      // Build the set of slots to show: all managed slots + any slot with a code
+      const slotsToShow = new Set([mc.guest_slot, mc.cleaner_slot].filter(Boolean));
+      Object.keys(lock.code_slots || {}).forEach(k => slotsToShow.add(Number(k)));
+      const sortedSlots = [...slotsToShow].sort((a, b) => a - b);
+
+      const slotsHtml = (sortedSlots.length ? sortedSlots : [mc.guest_slot, mc.cleaner_slot].filter(Boolean)).map(i => {
         const isGuest   = mc.guest_slot   === i;
         const isCleaner = mc.cleaner_slot === i;
         const managed   = isGuest || isCleaner;
 
-        let code = "——";
+        let code = lock.code_slots?.[String(i)] || "——";
         if (isGuest && mc.active_guest_code)   code = mc.active_guest_code;
         else if (isCleaner && mc.cleaner_code) code = mc.cleaner_code;
-        else if (lock.code_slots?.[String(i)]) code = lock.code_slots[String(i)];
 
         const tag = isGuest
           ? `<span class="slot-tag tag-guest">Guest</span>`
