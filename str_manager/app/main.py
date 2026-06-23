@@ -184,6 +184,12 @@ async def api_refresh():
     return {"ok": True, "message": "Calendar refresh triggered."}
 
 
+@app.post("/api/reload-store")
+async def api_reload_store():
+    ok = await ha_client.reload_addon_store()
+    return {"ok": ok}
+
+
 # ── WebSocket ─────────────────────────────────────────────────────────────────
 
 @app.websocket("/ws")

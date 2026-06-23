@@ -590,6 +590,17 @@ async function saveSettings(e) {
   setTimeout(() => statusEl.classList.add("hidden"), 3000);
 }
 
+async function reloadAddonStore() {
+  const btn = document.querySelector(".btn-check-update");
+  const orig = btn.textContent;
+  btn.textContent = "Checking…";
+  btn.disabled = true;
+  const resp = await fetch("api/reload-store", { method: "POST" });
+  const data = await resp.json();
+  btn.textContent = data.ok ? "✓ Done — check HA for updates" : "✗ Failed";
+  setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 3000);
+}
+
 // ── Helpers ────────────────────────────────────────────────────────────────
 function esc(s) {
   return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");

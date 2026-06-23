@@ -437,6 +437,14 @@ ul, ol { list-style: none; }
 .save-msg { font-size: 13px; text-align: center; margin-bottom: 8px; }
 .save-msg.ok  { color: var(--green); }
 .save-msg.err { color: var(--red); }
+.save-bar-row { display: flex; gap: 8px; }
+.btn-check-update {
+  padding: 13px 14px; border-radius: var(--r); flex-shrink: 0;
+  background: var(--s2); color: var(--t2); border: 1px solid var(--border2);
+  font-size: 13px; font-weight: 500;
+  transition: background .15s, color .15s;
+}
+.btn-check-update:hover { background: var(--s3); color: var(--t1); }
 .btn-save {
   display: flex; align-items: center; justify-content: center;
   width: 100%; padding: 13px; border-radius: var(--r);

@@ -341,7 +341,12 @@
     <!-- Fixed save bar -->
     <div class="save-bar">
       <div id="save-status" class="save-msg hidden"></div>
-      <button type="submit" form="settings-form" class="btn-save">Save Settings</button>
+      <div class="save-bar-row">
+        <button type="button" class="btn-check-update" onclick="reloadAddonStore()" title="Force HA to re-fetch add-on repositories and pick up new versions">
+          ↻ Check for Updates
+        </button>
+        <button type="submit" form="settings-form" class="btn-save">Save Settings</button>
+      </div>
     </div>
   </div>
 

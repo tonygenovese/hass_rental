@@ -9,8 +9,9 @@ import aiohttp
 
 logger = logging.getLogger(__name__)
 
-HA_URL = "http://supervisor/core/api"
-WS_URL = "ws://supervisor/core/websocket"
+HA_URL        = "http://supervisor/core/api"
+SUPERVISOR_URL = "http://supervisor"
+WS_URL        = "ws://supervisor/core/websocket"
 
 
 def _token() -> str:
@@ -68,6 +69,20 @@ async def get_state(entity_id: str) -> dict[str, Any] | None:
             if resp.status == 404:
                 return None
             return await resp.json()
+
+
+async def reload_addon_store() -> bool:
+    """Tell the Supervisor to re-fetch all add-on repositories."""
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{SUPERVISOR_URL}/store",
+                headers=_headers(),
+            ) as resp:
+                return resp.status < 400
+    except Exception as exc:
+        logger.error("reload_addon_store failed: %s", exc)
+        return False
 
 
 # WebSocket event subscription
