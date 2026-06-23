@@ -81,7 +81,7 @@ async def get_lock_usercodes(entity_id: str, node_id: int, max_slots: int = 10) 
 
     results: dict[str, str] = {}
     try:
-        async with websockets.connect(WS_URL, open_timeout=5, ping_timeout=5) as ws:
+        async with websockets.connect(WS_URL) as ws:
             # Auth
             await ws.recv()  # auth_required
             await ws.send(json.dumps({"type": "auth", "access_token": _token()}))

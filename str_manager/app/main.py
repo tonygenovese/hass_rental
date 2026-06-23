@@ -121,7 +121,7 @@ async def api_reservation_override(body: dict):
 async def api_device_status():
     cfg = settings.load()
     lock_ids        = cfg.get("lock_entity_ids", [])
-    thermostat_id   = cfg.get("thermostat_entity_id", "")
+    thermostat_ids  = cfg.get("thermostat_entity_ids", [])
     valve_id        = cfg.get("water_valve_entity_id", "")
 
     locks = []
@@ -154,20 +154,21 @@ async def api_device_status():
             "code_slots":    code_slots,
         })
 
-    thermostat = None
-    if thermostat_id:
-        state = await ha_client.get_state(thermostat_id)
-        if state:
-            attrs = state.get("attributes", {})
-            thermostat = {
-                "entity_id":           thermostat_id,
-                "name":                attrs.get("friendly_name", thermostat_id),
-                "state":               state.get("state"),
-                "current_temperature": attrs.get("current_temperature"),
-                "target_temperature":  attrs.get("temperature"),
-                "hvac_action":         attrs.get("hvac_action"),
-                "unit":                attrs.get("temperature_unit", "°F"),
-            }
+    thermostats = []
+    for tid in thermostat_ids:
+        state = await ha_client.get_state(tid)
+        if not state:
+            continue
+        attrs = state.get("attributes", {})
+        thermostats.append({
+            "entity_id":           tid,
+            "name":                attrs.get("friendly_name", tid),
+            "state":               state.get("state"),
+            "current_temperature": attrs.get("current_temperature"),
+            "target_temperature":  attrs.get("temperature"),
+            "hvac_action":         attrs.get("hvac_action"),
+            "unit":                attrs.get("temperature_unit", "°F"),
+        })
 
     water_valve = None
     if valve_id:
@@ -182,7 +183,7 @@ async def api_device_status():
 
     return {
         "locks":         locks,
-        "thermostat":    thermostat,
+        "thermostats":   thermostats,
         "water_valve":   water_valve,
         "managed_codes": scheduler.get_managed_codes(),
     }

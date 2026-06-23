@@ -344,12 +344,15 @@ async function loadDevices() {
       const stateClass = st === "locked" ? "state-locked" : st === "unlocked" ? "state-unlocked" : "state-unknown";
       const stateLabel = lock.state ? lock.state.charAt(0).toUpperCase() + lock.state.slice(1) : "Unknown";
 
-      // Build the set of slots to show: all managed slots + any slot with a code
-      const slotsToShow = new Set([mc.guest_slot, mc.cleaner_slot].filter(Boolean));
+      // Always show slots 1 through at least max(5, highest managed slot),
+      // plus any higher slots that have codes
+      const highManaged = Math.max(mc.guest_slot || 0, mc.cleaner_slot || 0, 5);
+      const slotsToShow = new Set();
+      for (let i = 1; i <= highManaged; i++) slotsToShow.add(i);
       Object.keys(lock.code_slots || {}).forEach(k => slotsToShow.add(Number(k)));
       const sortedSlots = [...slotsToShow].sort((a, b) => a - b);
 
-      const slotsHtml = (sortedSlots.length ? sortedSlots : [mc.guest_slot, mc.cleaner_slot].filter(Boolean)).map(i => {
+      const slotsHtml = sortedSlots.map(i => {
         const isGuest   = mc.guest_slot   === i;
         const isCleaner = mc.cleaner_slot === i;
         const managed   = isGuest || isCleaner;
@@ -386,12 +389,11 @@ async function loadDevices() {
     locksEl.innerHTML = '<div class="empty">No locks configured.<br>Add lock entities in Settings.</div>';
   }
 
-  // Thermostat
+  // Thermostats
   const thermoSection = document.getElementById("devices-thermostat-section");
   const thermoEl      = document.getElementById("devices-thermostat");
-  if (data.thermostat) {
-    const t = data.thermostat;
-    thermoEl.innerHTML = `
+  if (data.thermostats && data.thermostats.length > 0) {
+    thermoEl.innerHTML = data.thermostats.map(t => `
       <div class="device-card">
         <div class="device-card-head">
           <div class="device-name">${esc(t.name)}</div>
@@ -411,7 +413,7 @@ async function loadDevices() {
             <div class="thermo-val">${esc(t.hvac_action || t.state || "—")}</div>
           </div>
         </div>
-      </div>`;
+      </div>`).join("");
     thermoSection.classList.remove("hidden");
   } else {
     thermoSection.classList.add("hidden");
@@ -477,9 +479,39 @@ async function loadSettings() {
   renderAutomationList("checkout",   cfg.checkout_automation_ids     || [], automationEntities);
   renderAutomationList("precheckin", cfg.pre_checkin_automation_ids  || [], automationEntities);
 
-  populateSelect("thermostat_entity_id", climateEntities, cfg.thermostat_entity_id || "", "None");
+  window._climateEntities = climateEntities;
+  const thermoIds = cfg.thermostat_entity_ids?.length ? cfg.thermostat_entity_ids
+    : (cfg.thermostat_entity_id ? [cfg.thermostat_entity_id] : []);
+  renderThermostatList(thermoIds, climateEntities);
+
   const valveEl = document.getElementById("water_valve_entity_id");
   if (valveEl) valveEl.value = cfg.water_valve_entity_id || "";
+}
+
+function renderThermostatList(selected, entities) {
+  const container = document.getElementById("thermostat_entities");
+  container.innerHTML = "";
+  if (selected.length === 0) selected = [""];
+  selected.forEach(val => container.appendChild(buildThermostatRow(val, entities)));
+}
+
+function buildThermostatRow(value, entities) {
+  const div = document.createElement("div");
+  div.className = "automation-row";
+  const sel = document.createElement("select");
+  sel.innerHTML = `<option value="">Select thermostat…</option>` +
+    (entities || []).map(e =>
+      `<option value="${e.entity_id}"${e.entity_id === value ? " selected" : ""}>${esc(e.name || e.entity_id)}</option>`
+    ).join("");
+  const rm = document.createElement("button");
+  rm.type = "button"; rm.className = "auto-rm"; rm.textContent = "✕";
+  rm.onclick = () => div.remove();
+  div.appendChild(sel); div.appendChild(rm);
+  return div;
+}
+
+function addThermostat() {
+  document.getElementById("thermostat_entities").appendChild(buildThermostatRow("", window._climateEntities || []));
 }
 
 function renderLockList(selected, entities) {
@@ -562,7 +594,7 @@ async function saveSettings(e) {
   const statusEl = document.getElementById("save-status");
 
   const data = {};
-  ["ical_url", "cleaner_code", "property_timezone", "water_valve_entity_id"].forEach(f => data[f] = document.getElementById(f).value.trim());
+  ["ical_url", "cleaner_code", "property_timezone", "water_valve_entity_id"].forEach(f => { const el = document.getElementById(f); if (el) data[f] = el.value.trim(); });
   ["poll_interval_minutes", "guest_code_slot", "cleaner_code_slot"].forEach(f =>
     data[f] = parseInt(document.getElementById(f).value, 10)
   );
@@ -570,8 +602,8 @@ async function saveSettings(e) {
     data[f] = document.getElementById(f).value
   );
   data.lock_entity_ids             = [...document.querySelectorAll("#lock_entities select")].map(s => s.value).filter(Boolean);
+  data.thermostat_entity_ids       = [...document.querySelectorAll("#thermostat_entities select")].map(s => s.value).filter(Boolean);
   data.notify_service              = document.getElementById("notify_service").value;
-  data.thermostat_entity_id        = document.getElementById("thermostat_entity_id").value;
   data.checkin_automation_ids      = [...document.querySelectorAll("#checkin_automations select")].map(s => s.value).filter(Boolean);
   data.checkout_automation_ids     = [...document.querySelectorAll("#checkout_automations select")].map(s => s.value).filter(Boolean);
   data.pre_checkin_automation_ids  = [...document.querySelectorAll("#precheckin_automations select")].map(s => s.value).filter(Boolean);

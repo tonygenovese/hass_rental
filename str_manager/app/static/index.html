@@ -322,11 +322,10 @@
         <div class="settings-group-title">🔌 Device Monitoring</div>
         <div class="settings-fields">
           <div class="field">
-            <label for="thermostat_entity_id">Thermostat Entity</label>
-            <select id="thermostat_entity_id">
-              <option value="">None</option>
-            </select>
-            <div class="field-hint">Shown in the Devices tab — no automations run on it.</div>
+            <label>Thermostat Entity / Entities</label>
+            <div id="thermostat_entities"></div>
+            <button type="button" class="add-auto" onclick="addThermostat()">+ Add thermostat</button>
+            <div class="field-hint">Shown in the Devices tab — no automations run on them.</div>
           </div>
           <div class="field">
             <label for="water_valve_entity_id">Water Valve Entity</label>

@@ -18,7 +18,7 @@ DEFAULTS: dict[str, Any] = {
     "checkin_automation_ids": [],
     "checkout_automation_ids": [],
     "pre_checkin_automation_ids": [],
-    "thermostat_entity_id": "",
+    "thermostat_entity_ids": [],
     "water_valve_entity_id": "",
 }
 
@@ -32,7 +32,10 @@ def load() -> dict[str, Any]:
     # Migrate single lock_entity_id → lock_entity_ids
     if merged.get("lock_entity_id") and not merged["lock_entity_ids"]:
         merged["lock_entity_ids"] = [merged["lock_entity_id"]]
-    for k in ("lock_entity_id", "guest_temp", "away_temp"):
+    # Migrate single thermostat_entity_id → thermostat_entity_ids
+    if merged.get("thermostat_entity_id") and not merged.get("thermostat_entity_ids"):
+        merged["thermostat_entity_ids"] = [merged["thermostat_entity_id"]]
+    for k in ("lock_entity_id", "thermostat_entity_id", "guest_temp", "away_temp"):
         merged.pop(k, None)
     return merged
 
