@@ -7,7 +7,7 @@ from typing import Any
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from . import activity_log, automations, ha_client, lock_manager, notifier, options as addon_options, reservation_overrides, settings
+from . import activity_log, automations, ha_client, lock_manager, notifier, options as addon_options, reservation_overrides, settings, test_reservations as test_res
 from .ical_parser import Reservation, fetch_reservations
 from .state_machine import RentalState, determine_state
 
@@ -214,24 +214,46 @@ async def _handle_transition(old: RentalState, new: RentalState, reservation: Re
 async def poll() -> None:
     global _state, _reservations, _active_reservation, _next_reservation, _last_sync
     cfg = settings.load()
-    ical_url = cfg.get("ical_url", "")
 
-    if not ical_url:
-        return
-
-    try:
-        _reservations = await fetch_reservations(
-            ical_url,
-            cfg.get("default_checkin_time", "15:00"),
-            cfg.get("default_checkout_time", "11:00"),
-            cfg.get("property_timezone", "America/New_York"),
-        )
+    # Test reservations mode: bypass iCal entirely and use manually-created fake bookings
+    if cfg.get("enable_test_reservations"):
+        _reservations = test_res.to_reservations()
         _last_sync = datetime.now(timezone.utc)
-    except Exception as exc:
-        logger.error("iCal fetch failed: %s", exc)
-        activity_log.add("error", f"Calendar sync failed: {exc}")
-        await _broadcast({"type": "log_update", "data": activity_log.recent(5)})
-        return
+    else:
+        # Support both legacy ical_url (single) and ical_urls (list)
+        ical_urls: list[str] = cfg.get("ical_urls") or ([cfg["ical_url"]] if cfg.get("ical_url") else [])
+        ical_urls = [u for u in ical_urls if u]
+        if not ical_urls:
+            return
+
+        merged: list[Reservation] = []
+        seen_uids: set[str] = set()
+        any_success = False
+
+        for url in ical_urls:
+            try:
+                rs = await fetch_reservations(
+                    url,
+                    cfg.get("default_checkin_time", "15:00"),
+                    cfg.get("default_checkout_time", "11:00"),
+                    cfg.get("property_timezone", "America/New_York"),
+                )
+                any_success = True
+                for r in rs:
+                    if r.uid not in seen_uids:
+                        seen_uids.add(r.uid)
+                        merged.append(r)
+            except Exception as exc:
+                logger.error("iCal fetch failed for %s: %s", url, exc)
+                activity_log.add("error", f"Calendar sync failed: {exc}")
+                await _broadcast({"type": "log_update", "data": activity_log.recent(5)})
+
+        if not any_success:
+            return
+
+        merged.sort(key=lambda r: r.check_in)
+        _reservations = merged
+        _last_sync = datetime.now(timezone.utc)
 
     now = datetime.now(timezone.utc)
     new_state = determine_state(_reservations, now)
@@ -270,12 +292,26 @@ async def handle_lock_event(event_data: dict[str, Any]) -> None:
     if not matched:
         return
 
-    notification_type = event_data.get("parameters", {}).get("notificationType")
-    event_type        = event_data.get("parameters", {}).get("eventType")
-    user_id           = event_data.get("parameters", {}).get("userId")
-
-    if notification_type != 6:
-        return
+    # HA Z-Wave JS fires zwave_js_notification in two formats depending on version:
+    #  Old: { parameters: { notificationType, notificationEvent, userId } }
+    #  New: { command_class: 113, label: "Access Control", event: "Keypad Unlock Operation",
+    #         event_data: { userId } }
+    params = event_data.get("parameters") or {}
+    if params:
+        if params.get("notificationType") != 6:
+            return
+        raw_event = params.get("notificationEvent") or params.get("eventType")
+        user_id = params.get("userId")
+        is_keypad_unlock = raw_event == 6
+        is_lock_event    = raw_event in {1, 3, 5}
+    else:
+        if event_data.get("command_class") != 113 or event_data.get("label") != "Access Control":
+            return
+        inner    = event_data.get("event_data") or {}
+        user_id  = inner.get("userId")
+        ev_name  = event_data.get("event", "")
+        is_keypad_unlock = ev_name == "Keypad Unlock Operation"
+        is_lock_event    = ev_name in {"Manual Lock Operation", "RF Lock Operation", "Keypad Lock Operation"}
 
     guest_slot   = cfg.get("guest_code_slot", 2)
     cleaner_slot = cfg.get("cleaner_code_slot", 3)
@@ -283,7 +319,7 @@ async def handle_lock_event(event_data: dict[str, Any]) -> None:
     guest_name   = _active_reservation.guest_name if _active_reservation else "Guest"
 
     notifs = cfg.get("notifications", {})
-    if event_type == 6:  # Keypad unlock
+    if is_keypad_unlock:
         if user_id == guest_slot and not _guest_first_entry_logged:
             _guest_first_entry_logged = True
             n_ga  = notifs.get("guest_arrived", {})
@@ -303,7 +339,7 @@ async def handle_lock_event(event_data: dict[str, Any]) -> None:
             activity_log.add("cleaner_entry", msg)
             await _broadcast({"type": "log_update", "data": activity_log.recent(5)})
 
-    elif event_type in {1, 3, 5} and _cleaner_present:  # Any lock event while cleaner is inside
+    elif is_lock_event and _cleaner_present:  # Any lock event while cleaner is inside
         _cleaner_present = False
         dry = addon_options.test_mode()
         pfx = "[TEST] " if dry else ""

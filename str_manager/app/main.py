@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import logging.handlers
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -7,9 +8,13 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import activity_log, ha_client, reservation_overrides, scheduler, settings
+from . import activity_log, ha_client, reservation_overrides, scheduler, settings, test_reservations
 
+_LOG_PATH = "/data/app.log"
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+_file_handler = logging.handlers.RotatingFileHandler(_LOG_PATH, maxBytes=500_000, backupCount=1)
+_file_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s"))
+logging.getLogger().addHandler(_file_handler)
 logger = logging.getLogger(__name__)
 
 _ws_clients: set[WebSocket] = set()
@@ -249,6 +254,47 @@ async def api_device_valve(body: dict):
 async def api_refresh():
     asyncio.create_task(scheduler.poll())
     return {"ok": True, "message": "Calendar refresh triggered."}
+
+
+@app.get("/api/test-reservations")
+async def api_get_test_reservations():
+    return test_reservations.load_raw()
+
+
+@app.post("/api/test-reservations")
+async def api_add_test_reservation(body: dict):
+    guest_name = body.get("guest_name", "Test Guest").strip()
+    check_in   = body.get("check_in", "").strip()
+    check_out  = body.get("check_out", "").strip()
+    if not check_in or not check_out:
+        return JSONResponse({"ok": False, "error": "check_in and check_out required"}, status_code=400)
+    entry = test_reservations.add(guest_name, check_in, check_out)
+    asyncio.create_task(scheduler.poll())
+    return {"ok": True, "reservation": entry}
+
+
+@app.delete("/api/test-reservations/{uid}")
+async def api_delete_test_reservation(uid: str):
+    ok = test_reservations.remove(uid)
+    asyncio.create_task(scheduler.poll())
+    return {"ok": ok}
+
+
+@app.delete("/api/test-reservations")
+async def api_clear_test_reservations():
+    test_reservations.clear()
+    asyncio.create_task(scheduler.poll())
+    return {"ok": True}
+
+
+@app.get("/api/app-logs")
+async def api_app_logs(lines: int = 300):
+    try:
+        with open(_LOG_PATH) as f:
+            all_lines = f.readlines()
+        return {"lines": [l.rstrip() for l in all_lines[-lines:]]}
+    except FileNotFoundError:
+        return {"lines": []}
 
 
 @app.post("/api/reload-store")

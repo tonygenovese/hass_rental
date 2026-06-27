@@ -28,6 +28,8 @@ function showTab(name) {
   if (name === "actions")  loadActions();
   if (name === "devices")  loadDevices();
   if (name === "settings") loadSettings();
+  if (name === "test")     loadTestReservations();
+  if (name === "logs")     loadAppLogs();
 }
 
 document.querySelectorAll(".tab-btn").forEach(btn => {
@@ -550,9 +552,16 @@ async function loadSettings() {
   allAutomations = automationEntities;
   window._lockEntities = lockEntities;
 
-  const fields = ["ical_url", "property_timezone", "poll_interval_minutes", "default_checkin_time",
+  renderCalendarList(cfg.ical_urls || []);
+
+  const fields = ["property_timezone", "poll_interval_minutes", "default_checkin_time",
     "default_checkout_time", "guest_code_slot", "cleaner_code_slot", "cleaner_code"];
   fields.forEach(f => { const el = document.getElementById(f); if (el) el.value = cfg[f] ?? ""; });
+
+  const testEnabled = cfg.enable_test_reservations === true;
+  const testEl = document.getElementById("enable_test_reservations");
+  if (testEl) testEl.checked = testEnabled;
+  setTestTabVisible(testEnabled);
 
   if (cfg.cleaner_code === "••••") {
     document.getElementById("cleaner_code").placeholder = "Leave blank to keep existing";
@@ -647,6 +656,33 @@ function addLock() {
   document.getElementById("lock_entities").appendChild(buildLockRow("", window._lockEntities || []));
 }
 
+function renderCalendarList(urls) {
+  const container = document.getElementById("ical_urls_list");
+  container.innerHTML = "";
+  const toRender = urls.length > 0 ? urls : [""];
+  toRender.forEach(url => container.appendChild(buildCalendarRow(url)));
+}
+
+function buildCalendarRow(value) {
+  const div = document.createElement("div");
+  div.className = "automation-row";
+  const input = document.createElement("input");
+  input.type = "url";
+  input.placeholder = "https://www.airbnb.com/calendar/ical/…";
+  input.value = value || "";
+  input.style.flex = "1";
+  const rm = document.createElement("button");
+  rm.type = "button"; rm.className = "auto-rm"; rm.textContent = "✕";
+  rm.onclick = () => div.remove();
+  div.appendChild(input);
+  div.appendChild(rm);
+  return div;
+}
+
+function addCalendarUrl() {
+  document.getElementById("ical_urls_list").appendChild(buildCalendarRow(""));
+}
+
 function maybeShowAutoHint(fieldId, entities, selectedValue, savedValue) {
   if (!savedValue && entities.length === 1 && selectedValue) {
     const el = document.getElementById(fieldId);
@@ -704,7 +740,8 @@ async function saveSettings(e) {
   const statusEl = document.getElementById("save-status");
 
   const data = {};
-  ["ical_url", "cleaner_code", "property_timezone"].forEach(f => { const el = document.getElementById(f); if (el) data[f] = el.value.trim(); });
+  ["cleaner_code", "property_timezone"].forEach(f => { const el = document.getElementById(f); if (el) data[f] = el.value.trim(); });
+  data.ical_urls = [...document.querySelectorAll("#ical_urls_list input[type='url']")].map(i => i.value.trim()).filter(Boolean);
   data.water_valve_entity_id = document.getElementById("water_valve_entity_id")?.value || "";
   ["poll_interval_minutes", "guest_code_slot", "cleaner_code_slot"].forEach(f =>
     data[f] = parseInt(document.getElementById(f).value, 10)
@@ -712,6 +749,7 @@ async function saveSettings(e) {
   ["default_checkin_time", "default_checkout_time"].forEach(f =>
     data[f] = document.getElementById(f).value
   );
+  data.enable_test_reservations    = document.getElementById("enable_test_reservations")?.checked ?? false;
   data.lock_entity_ids             = [...document.querySelectorAll("#lock_entities select")].map(s => s.value).filter(Boolean);
   data.thermostat_entity_ids       = [...document.querySelectorAll("#thermostat_entities select")].map(s => s.value).filter(Boolean);
   data.notify_service              = document.getElementById("notify_service").value;
@@ -740,6 +778,7 @@ async function saveSettings(e) {
   if (resp.ok) {
     statusEl.textContent = "✅ Settings saved.";
     statusEl.classList.add("ok");
+    setTestTabVisible(data.enable_test_reservations === true);
   } else {
     statusEl.textContent = "❌ Failed to save settings.";
     statusEl.classList.add("err");
@@ -760,6 +799,138 @@ async function reloadAddonStore() {
     btn.textContent = "✗ Request failed";
   }
   setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 5000);
+}
+
+// ── Test Reservations ─────────────────────────────────────────────────────
+function setTestTabVisible(visible) {
+  const btn = document.getElementById("tab-btn-test");
+  if (btn) btn.classList.toggle("hidden", !visible);
+}
+
+async function loadTestReservations() {
+  const el = document.getElementById("test-res-list");
+  const data = await fetch("api/test-reservations").then(r => r.json());
+  if (!data || data.length === 0) {
+    el.innerHTML = '<div class="empty">No test reservations. Add one above.</div>';
+    return;
+  }
+  el.innerHTML = data.map(r => `
+    <div class="res-card" style="margin-bottom:8px;">
+      <div class="res-top">
+        <div>
+          <div class="res-name">${esc(r.guest_name)}</div>
+        </div>
+        <button class="device-ctrl-btn ctrl-danger" onclick="deleteTestReservation('${esc(r.uid)}')">Remove</button>
+      </div>
+      <div class="res-dates">
+        <div class="res-date-cell">
+          <div class="micro-label">Check-in</div>
+          <div class="date-val">${formatDateTime(r.check_in)}</div>
+        </div>
+        <div class="res-date-cell">
+          <div class="micro-label">Check-out</div>
+          <div class="date-val">${formatDateTime(r.check_out)}</div>
+        </div>
+      </div>
+    </div>`).join("");
+}
+
+async function addTestReservation() {
+  const name   = document.getElementById("test-guest-name").value.trim() || "Test Guest";
+  const ci     = document.getElementById("test-check-in").value;
+  const co     = document.getElementById("test-check-out").value;
+  if (!ci || !co) { alert("Set both check-in and check-out times."); return; }
+  const ciUtc = new Date(ci).toISOString();
+  const coUtc = new Date(co).toISOString();
+  await fetch("api/test-reservations", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ guest_name: name, check_in: ciUtc, check_out: coUtc }),
+  });
+  document.getElementById("test-guest-name").value = "";
+  document.getElementById("test-check-in").value   = "";
+  document.getElementById("test-check-out").value  = "";
+  await loadTestReservations();
+  setTimeout(loadDashboard, 2000);
+}
+
+async function deleteTestReservation(uid) {
+  await fetch(`api/test-reservations/${uid}`, { method: "DELETE" });
+  await loadTestReservations();
+  setTimeout(loadDashboard, 2000);
+}
+
+async function clearTestReservations() {
+  await fetch("api/test-reservations", { method: "DELETE" });
+  await loadTestReservations();
+  setTimeout(loadDashboard, 2000);
+}
+
+function quickSetTime(scenario) {
+  const now = new Date();
+  const toLocal = d => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+  const ciEl = document.getElementById("test-check-in");
+  const coEl = document.getElementById("test-check-out");
+  if (scenario === "now") {
+    const ci = new Date(now); ci.setDate(ci.getDate() - 1);
+    const co = new Date(now); co.setDate(co.getDate() + 3);
+    ciEl.value = toLocal(ci); coEl.value = toLocal(co);
+    document.getElementById("test-guest-name").value = "Current Guest";
+  } else if (scenario === "soon") {
+    const ci = new Date(now); ci.setHours(ci.getHours() + 1);
+    const co = new Date(now); co.setDate(co.getDate() + 3);
+    ciEl.value = toLocal(ci); coEl.value = toLocal(co);
+    document.getElementById("test-guest-name").value = "Arriving Guest";
+  } else if (scenario === "cleaner") {
+    // Outgoing guest already checked out, next guest arrives in 8h → cleaner window
+    const outCi = new Date(now); outCi.setDate(outCi.getDate() - 3);
+    const outCo = new Date(now); outCo.setHours(outCo.getHours() - 1);
+    const nextCi = new Date(now); nextCi.setHours(nextCi.getHours() + 8);
+    const nextCo = new Date(now); nextCo.setDate(nextCo.getDate() + 3);
+    // Add the outgoing reservation first, then queue up the next
+    fetch("api/test-reservations", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ guest_name: "Outgoing Guest",
+        check_in: new Date(outCi.getTime() - outCi.getTimezoneOffset() * 60000).toISOString(),
+        check_out: new Date(outCo.getTime() - outCo.getTimezoneOffset() * 60000).toISOString() }),
+    }).then(() =>
+      fetch("api/test-reservations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ guest_name: "Next Guest",
+          check_in: new Date(nextCi.getTime() - nextCi.getTimezoneOffset() * 60000).toISOString(),
+          check_out: new Date(nextCo.getTime() - nextCo.getTimezoneOffset() * 60000).toISOString() }),
+      })
+    ).then(() => { loadTestReservations(); setTimeout(loadDashboard, 2000); });
+    return;
+  }
+}
+
+// ── Application Logs ──────────────────────────────────────────────────────
+const LOG_LEVEL_COLORS = { ERROR: "#e74c3c", WARNING: "#e67e22", INFO: "#2980b9", DEBUG: "#7f8c8d" };
+
+async function loadAppLogs() {
+  const el    = document.getElementById("app-log-output");
+  const level = document.getElementById("log-level-filter")?.value || "ALL";
+  const data  = await fetch("api/app-logs?lines=500").then(r => r.json());
+  const lines = (data.lines || []).filter(line => {
+    if (level === "ALL")     return true;
+    if (level === "WARNING") return /WARNING|ERROR/.test(line);
+    if (level === "ERROR")   return /ERROR/.test(line);
+    return true;
+  });
+  if (lines.length === 0) {
+    el.innerHTML = '<div class="empty">No log entries yet.</div>';
+    return;
+  }
+  el.innerHTML = lines.map(line => {
+    const level = /ERROR/.test(line) ? "ERROR" : /WARNING/.test(line) ? "WARNING"
+                : /DEBUG/.test(line) ? "DEBUG" : "INFO";
+    const color = LOG_LEVEL_COLORS[level] || "#333";
+    return `<div class="log-line" style="color:${color}">${esc(line)}</div>`;
+  }).join("");
+  el.scrollTop = el.scrollHeight;
 }
 
 // ── Notification settings helpers ─────────────────────────────────────────
@@ -793,3 +964,5 @@ function formatDateTime(iso) {
 // ── Init ───────────────────────────────────────────────────────────────────
 loadDashboard();
 connectWS();
+// Check if test tab should be visible on load
+fetch("api/settings").then(r => r.json()).then(cfg => setTestTabVisible(cfg.enable_test_reservations === true));

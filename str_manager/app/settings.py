@@ -38,7 +38,8 @@ _NOTIF_DEFAULTS: dict[str, Any] = {
 }
 
 DEFAULTS: dict[str, Any] = {
-    "ical_url": "",
+    "ical_urls": [],
+    "enable_test_reservations": False,
     "poll_interval_minutes": 30,
     "property_timezone": "America/New_York",
     "default_checkin_time": "15:00",
@@ -69,6 +70,10 @@ def load() -> dict[str, Any]:
     for key, default_val in _NOTIF_DEFAULTS.items():
         stored_val = stored_notifs.get(key, {})
         merged["notifications"][key] = {**default_val, **stored_val}
+    # Migrate legacy ical_url (single string) → ical_urls (list)
+    if merged.get("ical_url") and not merged.get("ical_urls"):
+        merged["ical_urls"] = [merged["ical_url"]]
+    merged.pop("ical_url", None)
     # Migrate single lock_entity_id → lock_entity_ids
     if merged.get("lock_entity_id") and not merged["lock_entity_ids"]:
         merged["lock_entity_ids"] = [merged["lock_entity_id"]]

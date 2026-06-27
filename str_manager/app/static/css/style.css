@@ -687,3 +687,56 @@ ul, ol { list-style: none; }
   transition: background .12s, border-color .12s;
 }
 .var-chip:hover { background: var(--blue-bg); border-color: rgba(0,122,255,0.3); }
+
+/* ── Field toggle row ──────────────────────────────────────────────────── */
+.field-toggle-row {
+  display: flex; align-items: flex-start;
+  justify-content: space-between; gap: 12px;
+}
+.field-toggle-label { font-size: 13px; font-weight: 500; color: var(--t1); margin-bottom: 3px; }
+
+/* ── Test Reservations tab ─────────────────────────────────────────────── */
+.test-res-header { padding: 12px 0 8px; }
+.test-res-title  { font-size: 18px; font-weight: 700; color: var(--t1); }
+.test-res-subtitle { font-size: 12px; color: var(--t2); margin-top: 3px; line-height: 1.4; }
+
+.test-quick-btns { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 8px; }
+.quick-label { font-size: 11px; color: var(--t3); font-weight: 500; }
+.quick-btn {
+  font-size: 11px; font-weight: 500; padding: 4px 10px;
+  border-radius: 20px; background: var(--s2); color: var(--blue);
+  border: 1px solid rgba(0,122,255,0.25); cursor: pointer;
+  transition: background .12s;
+}
+.quick-btn:hover { background: var(--blue-bg); }
+
+.btn-danger {
+  background: rgba(255,59,48,.07); color: var(--red);
+  border: 1px solid rgba(255,59,48,.2); border-radius: var(--r-sm);
+  font-size: 13px; font-weight: 500; padding: 7px 14px; cursor: pointer;
+  transition: background .12s;
+}
+.btn-danger:hover { background: rgba(255,59,48,.14); }
+
+/* ── Logs tab ──────────────────────────────────────────────────────────── */
+.logs-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 0 8px;
+}
+.logs-title { font-size: 18px; font-weight: 700; color: var(--t1); }
+.logs-controls { display: flex; align-items: center; gap: 8px; }
+.logs-controls select {
+  font: inherit; font-size: 12px; padding: 4px 8px;
+  background: var(--s2); border: 1px solid var(--border); border-radius: var(--r-sm);
+  color: var(--t1);
+}
+
+.log-output {
+  background: var(--s2); border: 1px solid var(--border);
+  border-radius: var(--r); padding: 10px 12px;
+  font-family: 'SF Mono', ui-monospace, 'Menlo', monospace;
+  font-size: 11px; line-height: 1.55;
+  max-height: calc(100vh - 200px); overflow-y: auto;
+  white-space: pre-wrap; word-break: break-all;
+}
+.log-line { padding: 1px 0; }

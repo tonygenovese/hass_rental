@@ -56,6 +56,12 @@
     <button class="tab-btn" data-tab="settings">
       <span class="tab-icon">⚙️</span> Settings
     </button>
+    <button class="tab-btn hidden" id="tab-btn-test" data-tab="test">
+      <span class="tab-icon">🧪</span> Test
+    </button>
+    <button class="tab-btn" data-tab="logs">
+      <span class="tab-icon">📝</span> Logs
+    </button>
   </nav>
 
   <!-- ══════════════════════════════════════════════════════════════════ -->
@@ -235,8 +241,10 @@
         <div class="settings-group-title">📅 Calendar</div>
         <div class="settings-fields">
           <div class="field">
-            <label for="ical_url">Airbnb iCal URL</label>
-            <input type="url" id="ical_url" placeholder="https://www.airbnb.com/calendar/ical/…" />
+            <label>Calendar iCal URLs</label>
+            <div id="ical_urls_list"></div>
+            <button type="button" class="add-auto" onclick="addCalendarUrl()">+ Add calendar</button>
+            <div class="field-hint">Add one URL per platform (Airbnb, VRBO, etc.). Reservations from all calendars are merged.</div>
           </div>
           <div class="field">
             <label for="property_timezone">Property Timezone</label>
@@ -256,6 +264,16 @@
               <label for="default_checkout_time">Default Check-out</label>
               <input type="time" id="default_checkout_time" />
             </div>
+          </div>
+          <div class="field field-toggle-row">
+            <div>
+              <div class="field-toggle-label">Enable Test Reservations</div>
+              <div class="field-hint" style="margin:0;">Bypass iCal — use manually entered reservations for testing. Adds a Test tab to the menu.</div>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" id="enable_test_reservations" />
+              <span class="toggle-track"></span>
+            </label>
           </div>
         </div>
       </div>
@@ -510,6 +528,78 @@
     <div class="save-bar">
       <div id="save-status" class="save-msg hidden"></div>
       <button type="submit" form="settings-form" class="btn-save">Save Settings</button>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════════════ -->
+  <!-- TEST RESERVATIONS                                                  -->
+  <!-- ══════════════════════════════════════════════════════════════════ -->
+  <div id="tab-test" class="tab-content content hidden">
+    <div class="test-res-header">
+      <div class="test-res-title">Test Reservations</div>
+      <div class="test-res-subtitle">Bypass the iCal calendar to simulate stays. Transitions and lock codes still fire for real (unless test mode is also on).</div>
+    </div>
+
+    <!-- Add reservation form -->
+    <div class="card">
+      <div class="card-head"><span class="card-eyebrow">Add Test Reservation</span></div>
+      <div class="card-body">
+        <div class="field">
+          <label for="test-guest-name">Guest Name</label>
+          <input type="text" id="test-guest-name" placeholder="e.g. John Smith" />
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label for="test-check-in">Check-in</label>
+            <input type="datetime-local" id="test-check-in" />
+          </div>
+          <div class="field">
+            <label for="test-check-out">Check-out</label>
+            <input type="datetime-local" id="test-check-out" />
+          </div>
+        </div>
+        <div class="test-quick-btns">
+          <span class="quick-label">Quick:</span>
+          <button type="button" class="quick-btn" onclick="quickSetTime('now')">Guest now (+3 days)</button>
+          <button type="button" class="quick-btn" onclick="quickSetTime('soon')">Check-in soon (1h)</button>
+          <button type="button" class="quick-btn" onclick="quickSetTime('cleaner')">Cleaner window</button>
+        </div>
+        <button type="button" class="btn-primary" onclick="addTestReservation()" style="margin-top:12px;">Add Reservation</button>
+      </div>
+    </div>
+
+    <!-- Existing test reservations -->
+    <div class="card" style="margin-top:12px;">
+      <div class="card-head">
+        <span class="card-eyebrow">Active Test Reservations</span>
+        <button class="icon-btn" onclick="loadTestReservations()" title="Refresh">↻</button>
+      </div>
+      <div id="test-res-list" class="card-body">
+        <div class="empty">Loading…</div>
+      </div>
+      <div style="padding:0 16px 16px;">
+        <button type="button" class="btn-danger" onclick="clearTestReservations()">Clear All</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════════════ -->
+  <!-- LOGS                                                               -->
+  <!-- ══════════════════════════════════════════════════════════════════ -->
+  <div id="tab-logs" class="tab-content content hidden">
+    <div class="logs-header">
+      <span class="logs-title">Application Logs</span>
+      <div class="logs-controls">
+        <select id="log-level-filter" onchange="loadAppLogs()">
+          <option value="ALL">All levels</option>
+          <option value="WARNING">Warnings+</option>
+          <option value="ERROR">Errors only</option>
+        </select>
+        <button class="icon-btn" onclick="loadAppLogs()" title="Refresh logs">↻</button>
+      </div>
+    </div>
+    <div id="app-log-output" class="log-output">
+      <div class="empty">Loading…</div>
     </div>
   </div>
 
