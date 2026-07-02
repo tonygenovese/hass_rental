@@ -892,15 +892,13 @@ function quickSetTime(scenario) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ guest_name: "Outgoing Guest",
-        check_in: new Date(outCi.getTime() - outCi.getTimezoneOffset() * 60000).toISOString(),
-        check_out: new Date(outCo.getTime() - outCo.getTimezoneOffset() * 60000).toISOString() }),
+        check_in: outCi.toISOString(), check_out: outCo.toISOString() }),
     }).then(() =>
       fetch("api/test-reservations", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ guest_name: "Next Guest",
-          check_in: new Date(nextCi.getTime() - nextCi.getTimezoneOffset() * 60000).toISOString(),
-          check_out: new Date(nextCo.getTime() - nextCo.getTimezoneOffset() * 60000).toISOString() }),
+          check_in: nextCi.toISOString(), check_out: nextCo.toISOString() }),
       })
     ).then(() => { loadTestReservations(); setTimeout(loadDashboard, 2000); });
     return;

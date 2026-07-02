@@ -8,13 +8,16 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import activity_log, ha_client, reservation_overrides, scheduler, settings, test_reservations
+from . import activity_log, ha_client, manual_reservations, reservation_overrides, scheduler, settings
 
 _LOG_PATH = "/data/app.log"
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
-_file_handler = logging.handlers.RotatingFileHandler(_LOG_PATH, maxBytes=500_000, backupCount=1)
-_file_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s"))
-logging.getLogger().addHandler(_file_handler)
+try:
+    _file_handler = logging.handlers.RotatingFileHandler(_LOG_PATH, maxBytes=500_000, backupCount=1)
+    _file_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s"))
+    logging.getLogger().addHandler(_file_handler)
+except OSError as exc:
+    logging.getLogger(__name__).warning("File logging disabled (%s)", exc)
 logger = logging.getLogger(__name__)
 
 _ws_clients: set[WebSocket] = set()
@@ -78,8 +81,9 @@ async def api_get_settings():
 @app.post("/api/settings")
 async def api_save_settings(body: dict):
     current = settings.load()
-    # Don't overwrite cleaner_code if masked value sent back
-    if body.get("cleaner_code") == "••••":
+    # Preserve stored cleaner PIN when the field comes back masked OR blank —
+    # the UI blanks the masked field, so "" must mean "keep existing" too
+    if body.get("cleaner_code") in ("", "••••", None):
         body["cleaner_code"] = current.get("cleaner_code", "")
     merged = {**current, **body}
     settings.save(merged)
@@ -119,6 +123,8 @@ async def api_reservation_override(body: dict):
         check_out=body.get("check_out"),
     )
     activity_log.add("info", f"Times manually updated for reservation {uid}")
+    # Re-fetch so the state machine picks up the new effective times immediately
+    asyncio.create_task(scheduler.poll())
     return {"ok": True}
 
 
@@ -258,7 +264,7 @@ async def api_refresh():
 
 @app.get("/api/test-reservations")
 async def api_get_test_reservations():
-    return test_reservations.load_raw()
+    return manual_reservations.load_raw()
 
 
 @app.post("/api/test-reservations")
@@ -268,21 +274,21 @@ async def api_add_test_reservation(body: dict):
     check_out  = body.get("check_out", "").strip()
     if not check_in or not check_out:
         return JSONResponse({"ok": False, "error": "check_in and check_out required"}, status_code=400)
-    entry = test_reservations.add(guest_name, check_in, check_out)
+    entry = manual_reservations.add(guest_name, check_in, check_out)
     asyncio.create_task(scheduler.poll())
     return {"ok": True, "reservation": entry}
 
 
 @app.delete("/api/test-reservations/{uid}")
 async def api_delete_test_reservation(uid: str):
-    ok = test_reservations.remove(uid)
+    ok = manual_reservations.remove(uid)
     asyncio.create_task(scheduler.poll())
     return {"ok": ok}
 
 
 @app.delete("/api/test-reservations")
 async def api_clear_test_reservations():
-    test_reservations.clear()
+    manual_reservations.clear()
     asyncio.create_task(scheduler.poll())
     return {"ok": True}
 

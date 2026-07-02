@@ -1,10 +1,10 @@
-"""Tests for state transition side effects (lock codes, thermostat, notifications, automations).
+"""Tests for state transition side effects (lock codes, notifications, automations).
 
 All HA service calls are mocked — no real Home Assistant required.
 """
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, call, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -18,13 +18,10 @@ from tests.conftest import utc
 
 FAKE_CFG = {
     **DEFAULTS,
-    "lock_entity_id": "lock.front_door",
+    "lock_entity_ids": ["lock.front_door"],
     "guest_code_slot": 2,
     "cleaner_code_slot": 3,
     "cleaner_code": "111222",
-    "thermostat_entity_id": "climate.main",
-    "guest_temp": 72,
-    "away_temp": 65,
     "notify_service": "mobile_app_iphone",
     "checkin_automation_ids": ["automation.checkin_scene"],
     "checkout_automation_ids": ["automation.checkout_scene"],
@@ -36,6 +33,13 @@ FUTURE_RES = Reservation(
     check_out=utc(2026, 6, 28, 11, 0),
 )
 
+PHONE_RES = Reservation(
+    guest_name="Bob Jones",
+    check_in=utc(2026, 6, 25, 15, 0),
+    check_out=utc(2026, 6, 28, 11, 0),
+    phone_last4="4321",
+)
+
 
 @pytest.fixture(autouse=True)
 def reset_sched(tmp_path, monkeypatch):
@@ -43,10 +47,13 @@ def reset_sched(tmp_path, monkeypatch):
     import app.activity_log as log_module
     monkeypatch.setattr(log_module, "LOG_PATH", str(tmp_path / "log.json"))
     monkeypatch.setattr(log_module, "_entries", [])
+    monkeypatch.setattr(sched, "_STATE_PATH", str(tmp_path / "state.json"))
 
     sched._state = RentalState.VACANT
     sched._active_guest_code = ""
     sched._guest_first_entry_logged = False
+    sched._cleaner_present = False
+    sched._last_active_guest = ""
     sched._active_reservation = None
     sched._next_reservation = None
     sched.broadcast_hook = None
@@ -64,14 +71,12 @@ def mock_services():
     with (
         patch("app.scheduler.lock_manager.set_code", new_callable=AsyncMock) as mock_set,
         patch("app.scheduler.lock_manager.clear_code", new_callable=AsyncMock) as mock_clear,
-        patch("app.scheduler.thermostat.set_temperature", new_callable=AsyncMock) as mock_temp,
         patch("app.scheduler.notifier.send", new_callable=AsyncMock) as mock_notify,
         patch("app.scheduler.automations.trigger", new_callable=AsyncMock) as mock_auto,
     ):
         yield {
             "set_code": mock_set,
             "clear_code": mock_clear,
-            "set_temp": mock_temp,
             "notify": mock_notify,
             "trigger": mock_auto,
         }
@@ -86,22 +91,34 @@ async def test_checkin_sets_guest_lock_code(mock_cfg, mock_services):
     args = mock_services["set_code"].call_args
     assert args[0][0] == "lock.front_door"
     assert args[0][1] == 2                   # guest slot
-    assert len(args[0][2]) == 6              # 6-digit code
+    assert len(args[0][2]) == 4              # random 4-digit code (no phone on file)
     assert args[0][2].isdigit()
 
 
-async def test_checkin_sets_guest_temp(mock_cfg, mock_services):
-    await sched._handle_transition(RentalState.VACANT, RentalState.OCCUPIED, FUTURE_RES)
-    mock_services["set_temp"].assert_awaited_once_with("climate.main", 72)
+async def test_checkin_uses_phone_last4_as_code(mock_cfg, mock_services):
+    await sched._handle_transition(RentalState.VACANT, RentalState.OCCUPIED, PHONE_RES)
+    args = mock_services["set_code"].call_args
+    assert args[0][2] == "4321"
+    assert sched._active_guest_code == "4321"
 
 
 async def test_checkin_sends_notification_with_code(mock_cfg, mock_services):
     await sched._handle_transition(RentalState.VACANT, RentalState.OCCUPIED, FUTURE_RES)
 
     mock_services["notify"].assert_awaited_once()
-    call_kwargs = mock_services["notify"].call_args[0]
-    assert "Alice Smith" in call_kwargs[1]   # title includes guest name
-    assert sched._active_guest_code in call_kwargs[2]  # message includes the code
+    call_args = mock_services["notify"].call_args[0]
+    assert "Alice Smith" in call_args[1]     # title includes guest name
+    assert sched._active_guest_code in call_args[2]  # message includes the code
+
+
+async def test_checkin_respects_disabled_notification(mock_services):
+    cfg = {**FAKE_CFG, "notifications": {
+        **FAKE_CFG["notifications"],
+        "checkin": {**FAKE_CFG["notifications"]["checkin"], "enabled": False},
+    }}
+    with patch("app.scheduler.settings.load", return_value=cfg):
+        await sched._handle_transition(RentalState.VACANT, RentalState.OCCUPIED, FUTURE_RES)
+    mock_services["notify"].assert_not_awaited()
 
 
 async def test_checkin_triggers_checkin_automations(mock_cfg, mock_services):
@@ -115,35 +132,46 @@ async def test_checkin_resets_first_entry_flag(mock_cfg, mock_services):
     assert sched._guest_first_entry_logged is False
 
 
-async def test_checkin_generates_new_code_each_time(mock_cfg, mock_services):
-    """Two check-ins should produce two different codes (statistically certain)."""
+async def test_checkin_records_last_active_guest(mock_cfg, mock_services):
     await sched._handle_transition(RentalState.VACANT, RentalState.OCCUPIED, FUTURE_RES)
-    code1 = sched._active_guest_code
-    sched._active_guest_code = ""
-    await sched._handle_transition(RentalState.VACANT, RentalState.OCCUPIED, FUTURE_RES)
-    code2 = sched._active_guest_code
-    # With 6-digit codes, same code twice in a row has 1/900000 probability
-    assert code1 != code2 or True   # not a hard assert, but log both
-    assert code2.isdigit() and len(code2) == 6
+    assert sched._last_active_guest == "Alice Smith"
+
+
+async def test_checkin_sets_code_on_all_locks(mock_services):
+    cfg = {**FAKE_CFG, "lock_entity_ids": ["lock.front_door", "lock.back_door"]}
+    with patch("app.scheduler.settings.load", return_value=cfg):
+        await sched._handle_transition(RentalState.VACANT, RentalState.OCCUPIED, FUTURE_RES)
+    called_locks = [c[0][0] for c in mock_services["set_code"].call_args_list]
+    assert called_locks == ["lock.front_door", "lock.back_door"]
 
 
 # ── OCCUPIED → VACANT ─────────────────────────────────────────────────────────
 
 async def test_checkout_clears_guest_lock_code(mock_cfg, mock_services):
-    sched._active_guest_code = "483920"
+    sched._active_guest_code = "4839"
     await sched._handle_transition(RentalState.OCCUPIED, RentalState.VACANT, FUTURE_RES)
     mock_services["clear_code"].assert_awaited_once_with("lock.front_door", 2)
-
-
-async def test_checkout_sets_away_temp(mock_cfg, mock_services):
-    await sched._handle_transition(RentalState.OCCUPIED, RentalState.VACANT, FUTURE_RES)
-    mock_services["set_temp"].assert_awaited_once_with("climate.main", 65)
 
 
 async def test_checkout_sends_vacant_notification(mock_cfg, mock_services):
     await sched._handle_transition(RentalState.OCCUPIED, RentalState.VACANT, FUTURE_RES)
     _, title, message, _ = mock_services["notify"].call_args[0]
-    assert "vacant" in message.lower() or "Vacant" in message
+    assert "vacant" in message.lower()
+
+
+async def test_checkout_notification_names_outgoing_guest(mock_cfg, mock_services):
+    """At checkout the active reservation is gone — the notification must name the
+    guest who just left (tracked via _last_active_guest), not the next arrival."""
+    sched._last_active_guest = "Alice Smith"
+    next_guest = Reservation(
+        guest_name="Next Guest",
+        check_in=utc(2026, 6, 29, 15, 0),
+        check_out=utc(2026, 7, 2, 11, 0),
+    )
+    await sched._handle_transition(RentalState.OCCUPIED, RentalState.VACANT, next_guest)
+    _, _, message, _ = mock_services["notify"].call_args[0]
+    assert "Alice Smith" in message
+    assert "Next Guest" not in message
 
 
 async def test_checkout_triggers_checkout_automations(mock_cfg, mock_services):
@@ -152,7 +180,7 @@ async def test_checkout_triggers_checkout_automations(mock_cfg, mock_services):
 
 
 async def test_checkout_clears_active_guest_code(mock_cfg, mock_services):
-    sched._active_guest_code = "483920"
+    sched._active_guest_code = "4839"
     await sched._handle_transition(RentalState.OCCUPIED, RentalState.VACANT, FUTURE_RES)
     assert sched._active_guest_code == ""
 
@@ -169,7 +197,7 @@ async def test_checkout_to_cleaner_clears_guest_and_sets_cleaner_code(mock_cfg, 
 async def test_checkout_to_cleaner_sends_cleaner_notification(mock_cfg, mock_services):
     await sched._handle_transition(RentalState.OCCUPIED, RentalState.CLEANER, FUTURE_RES)
     _, title, message, _ = mock_services["notify"].call_args[0]
-    assert "cleaner" in message.lower() or "Cleaner" in message
+    assert "cleaner" in message.lower()
 
 
 async def test_checkout_to_cleaner_triggers_checkout_automations(mock_cfg, mock_services):
@@ -182,7 +210,6 @@ async def test_checkout_to_cleaner_triggers_checkout_automations(mock_cfg, mock_
 async def test_cleaner_to_occupied_clears_cleaner_and_sets_guest_code(mock_cfg, mock_services):
     await sched._handle_transition(RentalState.CLEANER, RentalState.OCCUPIED, FUTURE_RES)
 
-    # Guest code set first (slot 2), cleaner cleared second (slot 3)
     set_calls = mock_services["set_code"].call_args_list
     clear_calls = mock_services["clear_code"].call_args_list
 
@@ -205,24 +232,13 @@ async def test_startup_recovery_sets_cleaner_code_only(mock_cfg, mock_services):
 # ── No lock configured ────────────────────────────────────────────────────────
 
 async def test_no_lock_entity_skips_all_lock_calls(mock_services):
-    cfg_no_lock = {**FAKE_CFG, "lock_entity_id": ""}
+    cfg_no_lock = {**FAKE_CFG, "lock_entity_ids": []}
     with patch("app.scheduler.settings.load", return_value=cfg_no_lock):
         await sched._handle_transition(RentalState.VACANT, RentalState.OCCUPIED, FUTURE_RES)
 
     mock_services["set_code"].assert_not_awaited()
     mock_services["clear_code"].assert_not_awaited()
-    mock_services["set_temp"].assert_awaited_once()   # thermostat still fires
     mock_services["notify"].assert_awaited_once()     # notification still fires
-
-
-# ── No thermostat configured ──────────────────────────────────────────────────
-
-async def test_no_thermostat_skips_temperature_call(mock_services):
-    cfg_no_thermo = {**FAKE_CFG, "thermostat_entity_id": ""}
-    with patch("app.scheduler.settings.load", return_value=cfg_no_thermo):
-        await sched._handle_transition(RentalState.VACANT, RentalState.OCCUPIED, FUTURE_RES)
-
-    mock_services["set_temp"].assert_not_awaited()
 
 
 # ── No cleaner code configured ────────────────────────────────────────────────
@@ -235,3 +251,33 @@ async def test_no_cleaner_code_skips_cleaner_slot(mock_services):
     # Guest slot cleared, but cleaner slot NOT set (no code to set)
     mock_services["clear_code"].assert_awaited_once_with("lock.front_door", 2)
     assert all(c[0][1] != 3 for c in mock_services["set_code"].call_args_list)
+
+
+async def test_no_cleaner_code_logs_visible_warning(mock_services):
+    """A missing cleaner PIN must surface in the activity log, not fail silently."""
+    import app.activity_log as log_module
+    cfg_no_cleaner = {**FAKE_CFG, "cleaner_code": ""}
+    with patch("app.scheduler.settings.load", return_value=cfg_no_cleaner):
+        await sched._handle_transition(RentalState.OCCUPIED, RentalState.CLEANER, FUTURE_RES)
+
+    messages = [e["message"] for e in log_module.recent(10)]
+    assert any("No cleaner PIN" in m for m in messages)
+
+
+# ── State persistence ─────────────────────────────────────────────────────────
+
+async def test_state_persists_across_restart(mock_cfg, mock_services):
+    """Runtime state written at check-in must survive a module 'restart'."""
+    await sched._handle_transition(RentalState.VACANT, RentalState.OCCUPIED, PHONE_RES)
+    sched._state = RentalState.OCCUPIED  # normally set by evaluate_state before transition
+    sched._save_state()
+
+    saved_code = sched._active_guest_code
+    sched._state = RentalState.VACANT
+    sched._active_guest_code = ""
+    sched._last_active_guest = ""
+
+    sched._load_state()
+    assert sched._state == RentalState.OCCUPIED
+    assert sched._active_guest_code == saved_code
+    assert sched._last_active_guest == "Bob Jones"

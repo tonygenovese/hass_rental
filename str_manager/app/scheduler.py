@@ -7,7 +7,7 @@ from typing import Any
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from . import activity_log, automations, ha_client, lock_manager, notifier, options as addon_options, reservation_overrides, settings, test_reservations as test_res
+from . import activity_log, automations, ha_client, lock_manager, notifier, options as addon_options, reservation_overrides, settings, manual_reservations as manual_res
 from .ical_parser import Reservation, fetch_reservations
 from .state_machine import RentalState, determine_state
 
@@ -19,17 +19,30 @@ _STATE_PATH = "/data/state.json"
 def _save_state() -> None:
     try:
         with open(_STATE_PATH, "w") as f:
-            json.dump({"active_guest_code": _active_guest_code}, f)
+            json.dump({
+                "state": _state.value,
+                "active_guest_code": _active_guest_code,
+                "guest_first_entry_logged": _guest_first_entry_logged,
+                "cleaner_present": _cleaner_present,
+                "last_active_guest": _last_active_guest,
+            }, f)
     except Exception as exc:
         logger.error("Failed to save runtime state: %s", exc)
 
 
 def _load_state() -> None:
-    global _active_guest_code
+    global _state, _active_guest_code, _guest_first_entry_logged, _cleaner_present, _last_active_guest
     try:
         with open(_STATE_PATH) as f:
             data = json.load(f)
-            _active_guest_code = data.get("active_guest_code", "")
+        _active_guest_code        = data.get("active_guest_code", "")
+        _guest_first_entry_logged = data.get("guest_first_entry_logged", False)
+        _cleaner_present          = data.get("cleaner_present", False)
+        _last_active_guest        = data.get("last_active_guest", "")
+        try:
+            _state = RentalState(data.get("state", "vacant"))
+        except ValueError:
+            _state = RentalState.VACANT
     except FileNotFoundError:
         pass
     except Exception as exc:
@@ -60,11 +73,9 @@ def get_status() -> dict[str, Any]:
     active = _active_reservation
     nxt = _next_reservation
 
-    check_in = check_out = None
-    if active:
-        ov = reservation_overrides.get(active.uid)
-        check_in  = ov.get("check_in",  active.check_in.isoformat())
-        check_out = ov.get("check_out", active.check_out.isoformat())
+    # Overrides are already applied to reservation times at fetch (poll)
+    check_in  = active.check_in.isoformat()  if active else None
+    check_out = active.check_out.isoformat() if active else None
 
     return {
         "state": _state,
@@ -83,27 +94,23 @@ def get_status() -> dict[str, Any]:
 
 def get_reservations() -> list[dict[str, Any]]:
     now = datetime.now(timezone.utc)
+    overrides = reservation_overrides.load()
     result = []
     for r in _reservations:
         if r.check_out <= now:
             continue
-        ov = reservation_overrides.get(r.uid)
-        check_in  = ov.get("check_in",  r.check_in.isoformat())
-        check_out = ov.get("check_out", r.check_out.isoformat())
-        ci = datetime.fromisoformat(check_in)
-        co = datetime.fromisoformat(check_out)
         result.append({
             "guest_name": r.guest_name,
-            "check_in":   check_in,
-            "check_out":  check_out,
-            "duration_nights": max(1, (co.date() - ci.date()).days),
+            "check_in":   r.check_in.isoformat(),
+            "check_out":  r.check_out.isoformat(),
+            "duration_nights": max(1, (r.check_out.date() - r.check_in.date()).days),
             "is_active": r.is_active(now),
             "phone_last4": r.phone_last4,
             "email": r.email,
             "adults": r.adults,
             "reservation_code": r.reservation_code,
             "uid": r.uid,
-            "has_override": bool(ov),
+            "has_override": bool(overrides.get(r.uid)),
         })
     return result
 
@@ -186,6 +193,8 @@ async def _handle_transition(old: RentalState, new: RentalState, reservation: Re
                     for lid in lock_ids:
                         await lock_manager.set_code(lid, cleaner_slot, cleaner_code)
                 activity_log.add("code_set", f"{pfx}Cleaner code set in slot {cleaner_slot}")
+            elif lock_ids:
+                activity_log.add("error", f"{pfx}No cleaner PIN configured — cleaner code NOT set. Add one in Settings → Lock.")
             n_co = notifs.get("checkout_cleaner", {})
             co_title = _render(n_co.get("title", "Check-out Complete"), guest=outgoing)
             co_msg   = _render(n_co.get("message", "Check-out tasks done for {guest}. Guest code cleared. Cleaner mode active."), guest=outgoing)
@@ -212,13 +221,13 @@ async def _handle_transition(old: RentalState, new: RentalState, reservation: Re
 
 
 async def poll() -> None:
-    global _state, _reservations, _active_reservation, _next_reservation, _last_sync
+    """Fetch reservations from all sources, apply manual overrides, then evaluate state."""
+    global _reservations, _last_sync
     cfg = settings.load()
 
     # Test reservations mode: bypass iCal entirely and use manually-created fake bookings
     if cfg.get("enable_test_reservations"):
-        _reservations = test_res.to_reservations()
-        _last_sync = datetime.now(timezone.utc)
+        fetched = manual_res.to_reservations()
     else:
         # Support both legacy ical_url (single) and ical_urls (list)
         ical_urls: list[str] = cfg.get("ical_urls") or ([cfg["ical_url"]] if cfg.get("ical_url") else [])
@@ -226,7 +235,7 @@ async def poll() -> None:
         if not ical_urls:
             return
 
-        merged: list[Reservation] = []
+        fetched = []
         seen_uids: set[str] = set()
         any_success = False
 
@@ -242,7 +251,7 @@ async def poll() -> None:
                 for r in rs:
                     if r.uid not in seen_uids:
                         seen_uids.add(r.uid)
-                        merged.append(r)
+                        fetched.append(r)
             except Exception as exc:
                 logger.error("iCal fetch failed for %s: %s", url, exc)
                 activity_log.add("error", f"Calendar sync failed: {exc}")
@@ -251,10 +260,30 @@ async def poll() -> None:
         if not any_success:
             return
 
-        merged.sort(key=lambda r: r.check_in)
-        _reservations = merged
-        _last_sync = datetime.now(timezone.utc)
+        fetched.sort(key=lambda r: r.check_in)
 
+    # Apply manual time overrides here so the state machine, actions,
+    # and UI all work from the same effective check-in/out times
+    overrides = reservation_overrides.load()
+    for r in fetched:
+        ov = overrides.get(r.uid) or {}
+        try:
+            if ov.get("check_in"):
+                r.check_in = datetime.fromisoformat(ov["check_in"])
+            if ov.get("check_out"):
+                r.check_out = datetime.fromisoformat(ov["check_out"])
+        except ValueError:
+            logger.warning("Ignoring invalid time override for reservation %s", r.uid)
+
+    _reservations = fetched
+    _last_sync = datetime.now(timezone.utc)
+    await evaluate_state()
+
+
+async def evaluate_state() -> None:
+    """Re-evaluate rental state from cached reservations; runs every minute
+    so transitions fire on time instead of waiting for the next iCal fetch."""
+    global _state, _active_reservation, _next_reservation
     now = datetime.now(timezone.utc)
     new_state = determine_state(_reservations, now)
 
@@ -268,10 +297,14 @@ async def poll() -> None:
     if new_state != _state:
         old_state = _state
         _state = new_state
+        _save_state()
         relevant = active or nxt
         asyncio.create_task(_handle_transition(old_state, new_state, relevant))
     else:
         await _broadcast({"type": "status_update", "data": get_status()})
+
+
+_lock_nodes: dict[str, int] = {}  # lock entity_id → Z-Wave node_id cache
 
 
 async def handle_lock_event(event_data: dict[str, Any]) -> None:
@@ -281,37 +314,33 @@ async def handle_lock_event(event_data: dict[str, Any]) -> None:
     if not lock_ids:
         return
 
-    # Match event node to one of our configured locks
+    # zwave_js_notification payload (per HA docs):
+    #   { command_class: 113, type: 6, event: <int>, label: "Access Control",
+    #     event_label: "Keypad unlock operation", parameters: {userId: N} }
+    # type 6 = Access Control; event 6 = keypad unlock, 1/3/5 = manual/RF/keypad lock
+    if event_data.get("command_class") != 113 or event_data.get("type") != 6:
+        return
+
+    # Match event node to one of our configured locks (node_id cached per entity)
     event_node = event_data.get("node_id")
     matched = False
     for lid in lock_ids:
-        state = await ha_client.get_state(lid)
-        if state and state.get("attributes", {}).get("node_id") == event_node:
+        node = _lock_nodes.get(lid)
+        if node is None:
+            state = await ha_client.get_state(lid)
+            node = (state or {}).get("attributes", {}).get("node_id")
+            if node is not None:
+                _lock_nodes[lid] = node
+        if node == event_node:
             matched = True
             break
     if not matched:
         return
 
-    # HA Z-Wave JS fires zwave_js_notification in two formats depending on version:
-    #  Old: { parameters: { notificationType, notificationEvent, userId } }
-    #  New: { command_class: 113, label: "Access Control", event: "Keypad Unlock Operation",
-    #         event_data: { userId } }
-    params = event_data.get("parameters") or {}
-    if params:
-        if params.get("notificationType") != 6:
-            return
-        raw_event = params.get("notificationEvent") or params.get("eventType")
-        user_id = params.get("userId")
-        is_keypad_unlock = raw_event == 6
-        is_lock_event    = raw_event in {1, 3, 5}
-    else:
-        if event_data.get("command_class") != 113 or event_data.get("label") != "Access Control":
-            return
-        inner    = event_data.get("event_data") or {}
-        user_id  = inner.get("userId")
-        ev_name  = event_data.get("event", "")
-        is_keypad_unlock = ev_name == "Keypad Unlock Operation"
-        is_lock_event    = ev_name in {"Manual Lock Operation", "RF Lock Operation", "Keypad Lock Operation"}
+    event   = event_data.get("event")
+    user_id = (event_data.get("parameters") or {}).get("userId")
+    is_keypad_unlock = event == 6
+    is_lock_event    = event in {1, 3, 5}
 
     guest_slot   = cfg.get("guest_code_slot", 2)
     cleaner_slot = cfg.get("cleaner_code_slot", 3)
@@ -322,6 +351,7 @@ async def handle_lock_event(event_data: dict[str, Any]) -> None:
     if is_keypad_unlock:
         if user_id == guest_slot and not _guest_first_entry_logged:
             _guest_first_entry_logged = True
+            _save_state()
             n_ga  = notifs.get("guest_arrived", {})
             msg   = _render(n_ga.get("message", "{guest} has arrived and used their code for the first time."), guest=guest_name)
             title = _render(n_ga.get("title", "Guest Arrived!"), guest=guest_name)
@@ -331,6 +361,7 @@ async def handle_lock_event(event_data: dict[str, Any]) -> None:
             await _broadcast({"type": "log_update", "data": activity_log.recent(5)})
         elif user_id == cleaner_slot and not _cleaner_present:
             _cleaner_present = True
+            _save_state()
             n_ca  = notifs.get("cleaner_arrived", {})
             msg   = n_ca.get("message", "Cleaner entered the property.")
             title = n_ca.get("title", "Cleaner Arrived")
@@ -341,6 +372,7 @@ async def handle_lock_event(event_data: dict[str, Any]) -> None:
 
     elif is_lock_event and _cleaner_present:  # Any lock event while cleaner is inside
         _cleaner_present = False
+        _save_state()
         dry = addon_options.test_mode()
         pfx = "[TEST] " if dry else ""
         n_cl  = notifs.get("cleaner_left", {})
@@ -436,6 +468,9 @@ def get_managed_codes() -> dict:
 def start(poll_interval_minutes: int = 30) -> None:
     _load_state()
     _scheduler.add_job(poll, "interval", minutes=poll_interval_minutes, id="ical_poll", replace_existing=True)
+    # Lightweight state re-check every minute so check-in/out transitions
+    # fire on time instead of waiting for the next calendar fetch
+    _scheduler.add_job(evaluate_state, "interval", minutes=1, id="state_eval", replace_existing=True)
     if not _scheduler.running:
         _scheduler.start()
     logger.info("Scheduler started with %d-minute poll interval", poll_interval_minutes)
